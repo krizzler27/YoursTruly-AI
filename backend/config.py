@@ -5,8 +5,9 @@ class Config(BaseSettings):
         env_file=".env"
     )
 
-    DEFAULT_LLM_PROVIDER : str
-    DEFAULT_LLM_MODEL: str
-    DEFAULT_OLLAMA_HOST: str
+    LLM_PROVIDER : str = "ollama"
+    LLM_MODEL: str = "qwen2.5:3b"
+    OLLAMA_HOST: str = "http://localhost:11434"
+    DATABASE_URL: str = "sqlite+pysqlite:///yourstrulyai.db"
 
 config = Config()

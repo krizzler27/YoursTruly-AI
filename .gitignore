@@ -22,3 +22,11 @@ Thumbs.db
 # Notebooks (local experiments)
 *.ipynb
 .devplans
+
+# DB (local, not committed)
+*.db
+*.sqlite
+*.sqlite3
+
+# Agent Memories and Instructions
+.agents/

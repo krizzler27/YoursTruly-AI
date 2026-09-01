@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-DEFAULT_TRUSTED_PROVIDERS: Set[str] = {
+TRUSTED_PROVIDERS: Set[str] = {
     "meta",
     "llama",
     "google",
@@ -30,9 +30,9 @@ class LLMFitServices:
     def __init__(
         self,
         trusted_providers: Optional[Set[str]] = None,
-        ollama_host: str = config.DEFAULT_OLLAMA_HOST,
+        ollama_host: str = config.OLLAMA_HOST,
     ):
-        self.trusted_providers = {p.lower() for p in (trusted_providers or DEFAULT_TRUSTED_PROVIDERS)}
+        self.trusted_providers = {p.lower() for p in (trusted_providers or TRUSTED_PROVIDERS)}
         self.ollama_host = ollama_host.rstrip("/")
 
     def _ensure_runner(self) -> List[str]:

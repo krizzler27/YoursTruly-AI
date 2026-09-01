@@ -2,7 +2,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi import FastAPI, status
 
-from router import llmapi, llmfitapi
+from router import chat_api, llmfit_api
+from db.models import Base
+from db.db_engine import engine
+
+# create tables on startup (SQLite, local-first)
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title='Local-AI')
 
@@ -21,8 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(llmapi.router)
-app.include_router(llmfitapi.router)
+app.include_router(chat_api.router)
+app.include_router(llmfit_api.router)
 
 @app.get("/", status_code=status.HTTP_200_OK)
 def health() -> JSONResponse:
