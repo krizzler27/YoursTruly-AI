@@ -20,7 +20,7 @@ class ChatServices:
     ) -> ConversationsModel:
         """Return existing conversation or create new when id is None."""
         if conversation_id is None:
-            clean_title = (title or "New chat").strip()[:48] or "New chat"
+            clean_title = (title or "New chat").strip()[:32] or "New chat"
             return self.chat_repo.create(title=clean_title)
         conv = self.chat_repo.get_by_id(conversation_id)
         if conv is None:
@@ -38,3 +38,13 @@ class ChatServices:
         """Return last `limit` messages as LLM-ready dicts."""
         rows = self.message_repo.list_by_conversation(conversation_id, limit=limit)
         return [{"role": r.role, "content": r.content} for r in rows]
+
+    def list_conversations(self, limit: int = 50) -> List[ConversationsModel]:
+        return self.chat_repo.list_recent(limit=limit)
+
+    def list_messages(self, conversation_id: uuid.UUID, limit: int = 100) -> List[MessagesModel]:
+        rows = self.message_repo.list_by_conversation(conversation_id, limit=limit)
+        # ensure existence check
+        if not self.chat_repo.get_by_id(conversation_id):
+            raise ValueError(f"Conversation {conversation_id} not found")
+        return rows

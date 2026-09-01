@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
+from typing import List
 import time
 import json
+import uuid
 
 from db.db_engine import get_db
 from services.llm_services import LLMServices
 from services.chat_services import ChatServices
-from schemas.api_schemas import ChatRequest
+from schemas.api_schemas import ChatRequest, ConversationResponse, MessageResponse
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -43,7 +45,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             ttft_ms = 0.0
         except Exception as e:
             return JSONResponse(
-                status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}
+                status_code=500,
+                content={"Exception occured": str(e), "type": type(e).__name__},
+                headers={"X-Conversation-Id": str(conversation.id)},
             )
 
         # 2. Generator that emits the cached first token, then continues the stream
@@ -87,3 +91,25 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         return JSONResponse(
             status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}
         )
+
+
+@router.get('/conversations', response_model=List[ConversationResponse])
+def list_conversations(db: Session = Depends(get_db)):
+    try:
+        svc = ChatServices(db)
+        rows = svc.list_conversations(limit=50)
+        return rows
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+
+
+@router.get('/conversations/{conversation_id}/messages', response_model=List[MessageResponse])
+def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
+    try:
+        svc = ChatServices(db)
+        rows = svc.list_messages(conversation_id, limit=100)
+        return rows
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"detail": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})

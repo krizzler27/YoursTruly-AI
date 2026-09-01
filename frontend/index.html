@@ -3,27 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LocalAI — Local chat. No cloud.</title>
+  <title>YoursTruly AI — Local chat. No cloud.</title>
   <meta name="color-scheme" content="light dark" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231A1E22'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='13' fill='%23EAE6DF'>LA</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231A1E22'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='13' fill='%23EAE6DF'>YT</text></svg>">
   <link rel="stylesheet" href="https://unpkg.com/@knadh/oat/oat.min.css">
   <link rel="stylesheet" href="./theme.css">
   <script src="https://unpkg.com/@knadh/oat/oat.min.js" defer></script>
 </head>
-<body data-sidebar-layout>
+<body data-sidebar-layout="always">
   <!-- Topnav -->
   <nav data-topnav>
     <button data-sidebar-toggle aria-label="Toggle history" class="ghost small" style="border:1px solid var(--border)">☰</button>
     <div class="brand">
-      <span class="brand-mark">LA</span>
-      LocalAI
+      <span class="brand-mark">YT</span>
+      YoursTruly AI
     </div>
     <div style="flex:1"></div>
     <div class="hstack" style="gap:8px; align-items:center">
       <span class="status-dot" id="statusDot" aria-hidden="true"></span>
       <span class="mono" id="statusText" style="font-size:11px; color:var(--muted-foreground)">checking…</span>
     </div>
-    <a class="button ghost small" href="http://127.0.0.1:8000/" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
+    <a class="button ghost small" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
   </nav>
 
   <!-- Sidebar — memory ledger -->
@@ -42,7 +42,7 @@
     <div style="flex:1"></div>
 
     <footer class="vstack" style="gap:0; padding-top:12px; border-top:1px solid var(--border)">
-      <div class="mono" style="font-size:10px; color:var(--faint-foreground); text-align:center">LocalAI • <span id="year"></span></div>
+      <div class="mono" style="font-size:10px; color:var(--faint-foreground); text-align:center">YoursTruly AI • <span id="year"></span></div>
     </footer>
   </aside>
 
@@ -53,10 +53,13 @@
         <!-- Empty hero — thesis -->
         <div id="empty" class="empty">
           <h1>Local chat.<br>No cloud.</h1>
-          <p>Start with a prompt or write your own.</p>
+          <div id="centerStatus" class="center-status mono" aria-live="polite">
+            <span class="status-dot" id="centerStatusDot" aria-hidden="true"></span>
+            <span id="centerStatusText">checking…</span>
+          </div>
           <div class="trace-wrap" id="trace" aria-hidden="true">
             <svg viewBox="0 0 560 24" preserveAspectRatio="none">
-              <path id="tracePath" class="trace-path" d="M 8 14 C 140 14 180 10 212 14 C 244 18 280 14 552 14" />
+              <path id="tracePath" class="trace-path" d="M 8 14 Q 20 4 32 14 T 56 14 T 80 14 T 104 14 T 128 14 T 152 14 T 176 14 T 200 14 T 224 14 T 248 14 T 272 14 T 296 14 T 320 14 T 344 14 T 368 14 T 392 14 T 416 14 T 440 14 T 464 14 T 488 14 T 512 14 T 536 14 T 552 14" />
               <circle cx="8" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
               <circle cx="552" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
             </svg>
@@ -98,7 +101,6 @@
         </div>
         <div class="composer-foot">
           <span class="ttft" id="ttft" aria-live="polite"></span>
-          <span class="mono" style="font-size:10px; color:var(--faint-foreground)">Backend: <code style="text-transform:none; letter-spacing:0">127.0.0.1:8000</code> • memory-only Phase 1</span>
         </div>
       </form>
     </div>

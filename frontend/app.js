@@ -16,35 +16,32 @@ const historyList = $('#historyList');
 const ttftEl = $('#ttft');
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');
+const centerStatusDot = $('#centerStatusDot');
+const centerStatusText = $('#centerStatusText');
+const centerStatus = $('#centerStatus');
 
 let selectedModel = null;
 let isStreaming = false;
-let turns = []; // memory-only: {role, content}
-let conversations = []; // local ledger for sidebar
+let currentConversationId = null;
+let conversations = [];
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
 function mdSimple(src) {
-  // Store code fences
   const fences = [];
   let html = src.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
     const idx = fences.length;
     fences.push(`<pre><code>${escapeHtml(code.trim())}</code></pre>`);
     return `\x00FENCE${idx}\x00`;
   });
-  // inline code
   html = html.replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`);
   html = escapeHtml(html);
-  // restore fences (already escaped)
   html = html.replace(/\x00FENCE(\d+)\x00/g, (_, i) => fences[Number(i)]);
-  // bold
   html = html.replace(/\*\*([^\n*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/__([^\n_]+)__/g, '<strong>$1</strong>');
-  // italic (after bold)
   html = html.replace(/\*([^\n*]+)\*/g, '<em>$1</em>');
-  // paragraphs + lists
   const lines = html.split('\n');
   let out = '';
   let inList = false;
@@ -63,7 +60,6 @@ function mdSimple(src) {
       out += `<li>${olMatch[1]}</li>`;
     } else {
       closeList();
-      // if line already contains block tag, keep as is
       if (line.startsWith('<pre>')) out += line;
       else out += `<p>${line}</p>`;
     }
@@ -75,6 +71,23 @@ function mdSimple(src) {
 function setStatus(online, text) {
   statusDot.className = 'status-dot' + (online ? '' : ' off');
   statusText.textContent = text;
+  if (centerStatusDot) centerStatusDot.className = 'status-dot' + (online ? '' : ' off');
+  if (centerStatusText) centerStatusText.textContent = text;
+  if (centerStatus) centerStatus.style.display = empty.style.display !== 'none' ? 'flex' : 'none';
+}
+function setModelPillDisabled(disabled) {
+  modelPill.disabled = disabled;
+  modelPill.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+  modelPill.style.opacity = disabled ? '0.45' : '';
+  modelPill.style.pointerEvents = disabled ? 'none' : '';
+  if (disabled) {
+    modelPill.removeAttribute('popovertarget');
+    modelMenu.style.display = 'none';
+    try { modelMenu.hidePopover(); } catch {}
+  } else {
+    modelPill.setAttribute('popovertarget', 'modelMenu');
+    modelMenu.style.display = '';
+  }
 }
 
 function autoResize() {
@@ -85,6 +98,11 @@ function autoResize() {
 function showEmpty(show) {
   empty.style.display = show ? 'block' : 'none';
   trace.style.display = show ? 'block' : 'none';
+  if (centerStatus) centerStatus.style.display = show ? 'flex' : 'none';
+}
+
+function clearThread() {
+  thread.querySelectorAll('.msg').forEach(el => el.remove());
 }
 
 function addMessage(role, content, opts={}) {
@@ -104,7 +122,6 @@ function addMessage(role, content, opts={}) {
   body.append(roleEl, card);
   wrap.append(avatar, body);
   thread.appendChild(wrap);
-  // render — cursor only, no spinner
   if (role === 'user') {
     card.textContent = content;
   } else {
@@ -116,7 +133,7 @@ function addMessage(role, content, opts={}) {
     }
   }
   thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
-  return { wrap, card, avatar };
+  return { wrap, card };
 }
 
 function updateAssistantCard(card, content, done=false) {
@@ -129,24 +146,47 @@ function updateAssistantCard(card, content, done=false) {
   thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
 }
 
+async function checkOllamaHealth() {
+  try {
+    const r = await fetch(`${API_BASE}/api/health/ollama`, { headers: { 'accept': 'application/json' } });
+    if (!r.ok) return false;
+    const data = await r.json();
+    return !!data.running;
+  } catch { return false; }
+}
+
 async function fetchModels() {
   try {
+    const healthy = await checkOllamaHealth();
+    if (!healthy) throw new Error('ollama offline');
     const r = await fetch(`${API_BASE}/api/models`, { headers: { 'accept': 'application/json' } });
     if (!r.ok) throw new Error('no models');
     const data = await r.json();
     const models = data.models || [];
     if (models.length) {
-      setStatus(true, 'local • ready');
+      setStatus(true, 'OLLAMA ONLINE');
       renderModelMenu(models);
       if (!selectedModel) selectedModel = models[0];
       modelNameEl.textContent = selectedModel;
-      hint.textContent = `${models.length} model${models.length>1?'s':''} available`;
+      hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
+      hint.style.display = '';
+      hint.removeAttribute('hidden');
+      setModelPillDisabled(false);
       return;
     }
     setStatus(true, 'no models — pull with ollama');
+    hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
+    hint.style.display = '';
+    hint.removeAttribute('hidden');
+    setModelPillDisabled(true);
   } catch (e) {
-    setStatus(false, 'offline — start ollama');
-    hint.textContent = 'Start with: ollama serve & ollama pull qwen2.5:3b';
+    setStatus(false, 'OLLAMA OFFLINE');
+    hint.textContent = '';
+    hint.style.display = 'none';
+    hint.setAttribute('hidden', '');
+    setModelPillDisabled(true);
+    modelNameEl.textContent = 'offline';
+    modelMenu.innerHTML = `<div class="mono" style="padding:8px 10px; color:var(--muted-foreground)">Ollama offline</div>`;
   }
 }
 
@@ -162,21 +202,15 @@ function renderModelMenu(models) {
       modelNameEl.textContent = m;
       [...modelMenu.children].forEach(c => c.classList.remove('active'));
       div.classList.add('active');
-      modelMenu.hidePopover?.();
-      // also hide via toggle
       try { modelMenu.hidePopover(); } catch {}
     });
     modelMenu.appendChild(div);
   });
 }
 
-function ensureConversation(title) {
-  if (!conversations.length) {
-    const id = Date.now().toString(36);
-    conversations.unshift({ id, title: title.slice(0, 48), at: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), turns: 0 });
-  }
-  conversations[0].turns = turns.length;
-  renderHistory();
+function truncateTitle(title, maxLen = 32) {
+  const t = title.trim();
+  return t.length > maxLen ? t.slice(0, maxLen) + '…' : t;
 }
 
 function renderHistory() {
@@ -185,20 +219,60 @@ function renderHistory() {
     return;
   }
   historyList.innerHTML = '';
-  conversations.forEach((c, idx) => {
+  conversations.forEach(c => {
     const div = document.createElement('div');
-    div.className = 'history-item' + (idx===0 ? ' active' : '');
-    const count = c.turns || turns.length;
-    div.innerHTML = `<span>${escapeHtml(c.title)}</span><small>${c.at} • ${count} messages</small>`;
+    div.className = 'history-item' + (c.id === currentConversationId ? ' active' : '');
+    div.dataset.id = c.id;
+    const short = truncateTitle(c.title, 32);
+    div.innerHTML = `<span title="${escapeHtml(c.title)}">${escapeHtml(short)}</span>`;
+    div.addEventListener('click', () => {
+      if (isStreaming) return;
+      currentConversationId = c.id;
+      renderHistory();
+      loadMessages(c.id);
+    });
     historyList.appendChild(div);
   });
+}
+
+async function loadConversations() {
+  try {
+    const r = await fetch(`${API_BASE}/api/conversations`);
+    if (!r.ok) throw new Error('failed');
+    const data = await r.json();
+    conversations = Array.isArray(data) ? data : [];
+    renderHistory();
+  } catch {
+    // keep empty hint, don't block
+    if (!conversations.length) renderHistory();
+  }
+}
+
+async function loadMessages(conversationId) {
+  try {
+    const r = await fetch(`${API_BASE}/api/conversations/${conversationId}/messages`);
+    if (!r.ok) throw new Error('failed');
+    const msgs = await r.json();
+    clearThread();
+    if (!msgs.length) {
+      showEmpty(true);
+      return;
+    }
+    showEmpty(false);
+    msgs.forEach(m => addMessage(m.role, m.content));
+    ttftEl.textContent = '';
+  } catch {
+    // fallback: show empty
+    clearThread();
+    showEmpty(true);
+  }
 }
 
 async function send() {
   const query = input.value.trim();
   if (!query || isStreaming) return;
-  // trace animation on first send
-  if (turns.length === 0) {
+  const isFirst = !currentConversationId && thread.querySelectorAll('.msg').length === 0;
+  if (isFirst) {
     tracePath.classList.remove('animate');
     void tracePath.getBoundingClientRect();
     tracePath.classList.add('animate');
@@ -206,11 +280,9 @@ async function send() {
   isStreaming = true;
   sendBtn.disabled = true;
   ttftEl.textContent = '';
-  turns.push({ role: 'user', content: query });
   addMessage('user', query);
   input.value = '';
   autoResize();
-  ensureConversation(query);
 
   const { card } = addMessage('assistant', '', { streaming: true });
   let acc = '';
@@ -218,16 +290,24 @@ async function send() {
   let ttftDone = false;
 
   try {
+    const payload = { query, model: selectedModel || undefined };
+    if (currentConversationId) payload.conversation_id = currentConversationId;
     const resp = await fetch(`${API_BASE}/api/chat/stream`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ query, model: selectedModel || undefined })
+      body: JSON.stringify(payload)
     });
+    const newId = resp.headers.get('X-Conversation-Id') || resp.headers.get('x-conversation-id');
+    if (newId) currentConversationId = newId;
     if (!resp.ok) {
       const t = await resp.text();
+      // keep conversation id even on 500 so next turn stays in same thread
+      if (newId) {
+        await loadConversations();
+        renderHistory();
+      }
       throw new Error(t || `HTTP ${resp.status}`);
     }
-    // TTFT from header (backend calculates)
     const ttftHeader = resp.headers.get('X-TTFT');
     if (ttftHeader) ttftEl.textContent = `TTFT ${Number(ttftHeader).toFixed(0)} ms`;
 
@@ -246,13 +326,14 @@ async function send() {
         const data = line.slice(6).trim();
         if (data === '[DONE]') {
           updateAssistantCard(card, acc, true);
-          turns.push({ role: 'assistant', content: acc });
           isStreaming = false;
           sendBtn.disabled = false;
           if (!ttftDone && !ttftHeader) {
             const ms = performance.now() - start;
             ttftEl.textContent = `TTFT ${ms.toFixed(0)} ms`;
           }
+          await loadConversations();
+          renderHistory();
           return;
         }
         try {
@@ -271,12 +352,15 @@ async function send() {
       }
     }
     updateAssistantCard(card, acc || 'No response.', true);
+    await loadConversations();
   } catch (e) {
     updateAssistantCard(card, `**Could not reach backend.** Is Ollama running?`, true);
   } finally {
     isStreaming = false;
     sendBtn.disabled = false;
     input.focus();
+    await loadConversations();
+    renderHistory();
   }
 }
 
@@ -290,17 +374,15 @@ input.addEventListener('keydown', (e) => {
 });
 composer.addEventListener('submit', (e) => { e.preventDefault(); send(); });
 sendBtn.addEventListener('click', (e) => { e.preventDefault(); send(); });
-$('#newChat').addEventListener('click', () => {
-  thread.querySelectorAll('.msg').forEach(el => el.remove());
-  turns = [];
-  conversations = [];
-  renderHistory();
+$('#newChat').addEventListener('click', async () => {
+  currentConversationId = null;
+  clearThread();
   showEmpty(true);
   ttftEl.textContent = '';
+  renderHistory();
   input.focus();
 });
 
-// Starters
 document.querySelectorAll('[data-starter]').forEach(btn => {
   btn.addEventListener('click', () => {
     input.value = btn.dataset.starter;
@@ -309,7 +391,6 @@ document.querySelectorAll('[data-starter]').forEach(btn => {
   });
 });
 
-// Popover fallback for browsers without popover API
 if (!HTMLElement.prototype.hasOwnProperty('popover')) {
   modelPill.addEventListener('click', () => {
     modelMenu.style.display = modelMenu.style.display === 'block' ? 'none' : 'block';
@@ -320,8 +401,28 @@ if (!HTMLElement.prototype.hasOwnProperty('popover')) {
   });
 }
 
+let lastHealthy = null;
+
+async function pollHealth() {
+  if (document.hidden) return;
+  const healthy = await checkOllamaHealth();
+  if (healthy === lastHealthy) return;
+  lastHealthy = healthy;
+  await fetchModels();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollHealth();
+});
+window.addEventListener('focus', pollHealth);
+
 // Init
-renderHistory();
-fetchModels();
-autoResize();
-showEmpty(true);
+(async () => {
+  await loadConversations();
+  renderHistory();
+  await fetchModels();
+  try { lastHealthy = await checkOllamaHealth(); } catch {}
+  autoResize();
+  if (!currentConversationId) showEmpty(true);
+  setInterval(pollHealth, 10000);
+})();

@@ -1,4 +1,4 @@
-/* Bench Vermilion — LocalAI theme for Oat */
+/* Bench Vermilion — YoursTruly AI theme for Oat */
 @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
@@ -10,6 +10,7 @@
   --sage: #8A9A8E;
   --sage-soft: #E6EBE6;
   --danger: #B94A3A;
+  --online: #1DB56A;
 
   /* Oat overrides */
   --background: var(--paper);
@@ -79,6 +80,24 @@ body[data-sidebar-layout] {
   background: var(--background);
   min-height: 100vh;
 }
+body[data-sidebar-layout="always"] {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: auto 1fr;
+  height: 100dvh;
+}
+body[data-sidebar-layout="always"][data-sidebar-open] {
+  grid-template-columns: 0 1fr;
+}
+body[data-sidebar-layout="always"][data-sidebar-open] > aside[data-sidebar] {
+  transform: translateX(-100%);
+  opacity: 0;
+  visibility: hidden;
+}
+[data-sidebar-toggle] {
+  display: inline-grid !important;
+  place-items: center;
+}
 
 /* Topnav — thin, quiet, like a bench label */
 [data-topnav] {
@@ -108,8 +127,8 @@ body[data-sidebar-layout] {
 }
 .status-dot {
   width: 7px; height: 7px; border-radius: 999px;
-  background: var(--sage);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--sage) 18%, transparent);
+  background: var(--online);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--online) 18%, transparent);
   animation: pulse 2.4s infinite;
 }
 .status-dot.off { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent); }
@@ -153,6 +172,13 @@ body[data-sidebar-layout] {
   display: flex; flex-direction: column; gap: 3px;
   transition: background 120ms ease, border-color 120ms ease;
 }
+.history-item span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  max-width: 100%;
+}
 .history-item:hover { background: #EDE9E1; }
 .history-item.active { background: white; border-color: var(--border); }
 .history-item small { font-size: 11px; color: var(--muted-foreground); font-family: 'JetBrains Mono', monospace; }
@@ -188,9 +214,10 @@ main {
 
 /* Empty hero — thesis */
 .empty {
-  margin: 56px 0 12px 0;
+  margin: 32px 0 12px 0;
   text-align: center;
-  max-width: 560px;
+  max-width: 640px;
+  width: 100%;
   align-self: center;
 }
 .empty h1 {
@@ -232,27 +259,32 @@ main {
 .trace-wrap {
   position: relative;
   height: 24px;
-  margin: 14px 0 8px 0;
+  width: 100%;
+  margin: 6px 0 18px 0;
   overflow: visible;
 }
 .trace-wrap svg { width: 100%; height: 100%; overflow: visible; }
 .trace-path {
   fill: none;
   stroke: var(--signal);
-  stroke-width: 1.35;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
-  stroke-dasharray: 560;
-  stroke-dashoffset: 560;
   opacity: 0.95;
 }
 .trace-path.animate {
   animation: draw 820ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
-@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes draw { from { opacity: 0.3; } to { opacity: 0.95; } }
 @media (prefers-reduced-motion: reduce) {
-  .trace-path.animate { animation: none; stroke-dashoffset: 0; }
+  .trace-path.animate { animation: none; }
+}
+/* Center status — above trace, mirrors topnav */
+.center-status {
+  display: flex; gap: 8px; align-items: center; justify-content: center;
+  margin: 10px 0 4px 0;
+  font-size: 11px; color: var(--muted-foreground);
 }
 
 /* Messages */
@@ -402,7 +434,7 @@ main {
 }
 .model-pill:hover { background: #EDE9E1; }
 .model-pill #modelName { color: var(--foreground); }
-.model-pill .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--sage); }
+.model-pill .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--online); }
 .model-pill .chev { opacity: 0.45; color: var(--muted-foreground); }
 .hint {
   font-size: 11px; color: var(--muted-foreground);
