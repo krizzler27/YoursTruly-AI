@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LocalAI — Local chat. No cloud.</title>
+  <meta name="color-scheme" content="light dark" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231A1E22'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='13' fill='%23EAE6DF'>LA</text></svg>">
+  <link rel="stylesheet" href="https://unpkg.com/@knadh/oat/oat.min.css">
+  <link rel="stylesheet" href="./theme.css">
+  <script src="https://unpkg.com/@knadh/oat/oat.min.js" defer></script>
+</head>
+<body data-sidebar-layout>
+  <!-- Topnav -->
+  <nav data-topnav>
+    <button data-sidebar-toggle aria-label="Toggle history" class="ghost small" style="border:1px solid var(--border)">☰</button>
+    <div class="brand">
+      <span class="brand-mark">LA</span>
+      LocalAI
+    </div>
+    <div style="flex:1"></div>
+    <div class="hstack" style="gap:8px; align-items:center">
+      <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+      <span class="mono" id="statusText" style="font-size:11px; color:var(--muted-foreground)">checking…</span>
+    </div>
+    <a class="button ghost small" href="http://127.0.0.1:8000/" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
+  </nav>
+
+  <!-- Sidebar — memory ledger -->
+  <aside data-sidebar>
+    <header class="vstack" style="gap:10px">
+      <button id="newChat" class="new-chat button">+ New chat</button>
+    </header>
+
+    <div class="vstack" style="gap:8px">
+      <div class="mono history-label">History</div>
+      <div id="historyList" class="history-list">
+        <div class="empty-hint">No conversations yet.<br>Your chats stay on this device.</div>
+      </div>
+    </div>
+
+    <div style="flex:1"></div>
+
+    <footer class="vstack" style="gap:0; padding-top:12px; border-top:1px solid var(--border)">
+      <div class="mono" style="font-size:10px; color:var(--faint-foreground); text-align:center">LocalAI • <span id="year"></span></div>
+    </footer>
+  </aside>
+
+  <!-- Main thread -->
+  <main>
+    <div class="thread-wrap" id="threadWrap">
+      <div class="thread" id="thread">
+        <!-- Empty hero — thesis -->
+        <div id="empty" class="empty">
+          <h1>Local chat.<br>No cloud.</h1>
+          <p>Start with a prompt or write your own.</p>
+          <div class="trace-wrap" id="trace" aria-hidden="true">
+            <svg viewBox="0 0 560 24" preserveAspectRatio="none">
+              <path id="tracePath" class="trace-path" d="M 8 14 C 140 14 180 10 212 14 C 244 18 280 14 552 14" />
+              <circle cx="8" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
+              <circle cx="552" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
+            </svg>
+          </div>
+          <div class="starter-grid" id="starters">
+            <button class="starter" data-starter="Explain quantization like I'm new — what's Q4_K_M?">Explain quantization <small>Q4_K_M in plain terms</small></button>
+            <button class="starter" data-starter="How do I keep KV-cache small on 8GB RAM?">KV-cache on 8GB <small>stay within limits</small></button>
+            <button class="starter" data-starter="Help me write a concise system prompt for a desk assistant">Draft system prompt <small>short & reliable</small></button>
+            <button class="starter" data-starter="Summarize this conversation when it gets long">Summarize thread <small>later, when needed</small></button>
+          </div>
+        </div>
+        <!-- messages injected here -->
+      </div>
+    </div>
+
+    <!-- Composer -->
+    <div class="composer-wrap">
+      <form id="composer" class="composer" autocomplete="off">
+        <textarea id="prompt" rows="1" placeholder="Ask anything…" aria-label="Message"></textarea>
+        <div class="composer-row">
+          <div class="composer-left">
+            <ot-dropdown>
+              <button type="button" id="modelPill" class="model-pill" popovertarget="modelMenu" aria-label="Select model">
+                <span class="dot" aria-hidden="true"></span>
+                <span id="modelName">local model</span>
+                <span class="chev">▾</span>
+              </button>
+              <menu popover id="modelMenu" class="model-menu">
+                <div class="mono" style="padding:8px 10px; color:var(--muted-foreground)">Loading models…</div>
+              </menu>
+            </ot-dropdown>
+            <span class="hint" id="hint">Enter to send • Shift+Enter for newline</span>
+          </div>
+          <div class="composer-right">
+            <button id="send" class="send button" type="submit" aria-label="Send">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="composer-foot">
+          <span class="ttft" id="ttft" aria-live="polite"></span>
+          <span class="mono" style="font-size:10px; color:var(--faint-foreground)">Backend: <code style="text-transform:none; letter-spacing:0">127.0.0.1:8000</code> • memory-only Phase 1</span>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+  <script src="./app.js" type="module"></script>
+</body>
+</html>
