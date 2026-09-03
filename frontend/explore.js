@@ -63,27 +63,32 @@ async function fetchSystem(){
     if(!r.ok) throw new Error();
     const j=await r.json();
     const sys=j.system || j.raw?.system || {};
-    // try common llmfit keys
-    const ram = sys.memory_available_gb ?? sys.ram_gb ?? sys.total_ram_gb ?? j.raw?.memory_available_gb ?? 0;
-    const vram = sys.vram_gb ?? sys.gpu_vram_gb ?? sys.gpu?.vram_gb ?? 0;
+    // llmfit keys: available_ram_gb (free now), total_ram_gb, gpu_vram_gb, backend/has_gpu
+    const ramAvail = sys.available_ram_gb ?? sys.memory_available_gb ?? sys.ram_gb ?? 0;
+    const ramTotal = sys.total_ram_gb ?? 0;
+    const vram = sys.gpu_vram_gb ?? sys.vram_gb ?? sys.gpus?.[0]?.vram_gb ?? sys.gpu?.vram_gb ?? 0;
     const cores = sys.cpu_cores ?? sys.cores ?? sys.cpu?.cores ?? '—';
     const gpu = sys.gpu_name ?? sys.gpu?.name ?? sys.gpus?.[0]?.name ?? 'none';
-    const mode = sys.run_mode ?? sys.gpu?.run_mode ?? 'CPU';
+    // dGPU = discrete (separate card, own VRAM/GDDR). iGPU = integrated inside CPU (shares system RAM, like 660M). Keep label VRAM — apt for both.
+    const hasGpu = !!(sys.has_gpu ?? sys.gpu_available_gb ?? sys.gpus?.length);
+    const backend = sys.backend ?? sys.gpus?.[0]?.backend ?? '';
+    const mode = hasGpu && backend ? `${backend}` : hasGpu ? 'GPU' : 'CPU';
     hwDot.classList.remove('off');
     hwStatus.textContent = 'hardware ready';
-    kpiRam.textContent = ram ? `${Number(ram).toFixed(1)} GB` : '—';
-    kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : 'UMA / CPU';
+    kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
+    kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
     kpiCores.textContent = String(cores);
     kpiGpu.textContent = String(gpu).slice(0,22);
     kpiMode.textContent = String(mode);
-    // bars: ram fill as 8GB baseline vs available
-    const ramPct = Math.min(100, (Number(ram)||8)/16*100);
+    // bars: ram fill as available vs total (if total known)
+    const ramBase = Number(ramTotal) || 16;
+    const ramPct = Math.min(100, (Number(ramAvail)||8)/ramBase*100);
     ramFill.style.width = ramPct + '%';
     ramFill.className = ramPct > 85 ? 'over' : '';
-    const vramPct = vram ? Math.min(100, Number(vram)/16*100) : 35;
+    const vramPct = vram ? Math.min(100, Number(vram)/ramBase*100) : 35;
     vramFill.style.width = vramPct + '%';
-    kpiRamMeta.textContent = `available for model`;
-    kpiVramMeta.textContent = vram ? `VRAM for offload` : `shared memory`;
+    kpiRamMeta.textContent = ramTotal ? `${Number(ramAvail).toFixed(1)} free / ${Number(ramTotal).toFixed(1)} total` : `available for model`;
+    kpiVramMeta.textContent = vram ? `VRAM for offload` : `CPU only`;
   }catch{
     hwDot.classList.add('off');
     hwStatus.textContent = 'offline — llmfit not found';
@@ -96,9 +101,9 @@ async function fetchLocal(){
     const j=await r.json();
     const models=j.models||[];
     cachePath.textContent=j.path||'~/.yourstrulyai/models';
-    cacheCount.textContent=`${models.length} GGUF`;
+    cacheCount.textContent=`${models.length} installed`;
     if(!models.length){
-      localList.innerHTML='<div class="empty mono">No GGUF yet — download a Perfect fit to start.</div>';
+      localList.innerHTML='<div class="empty mono">No models installed — pick a Perfect fit from the catalog below and Download.</div>';
       return;
     }
     localList.innerHTML='';
@@ -117,7 +122,7 @@ async function fetchLocal(){
       localList.appendChild(div);
     });
   }catch{
-    localList.innerHTML='<div class="empty mono">Could not load local cache.</div>';
+    localList.innerHTML='<div class="empty mono">Could not load installed models.</div>';
   }
 }
 

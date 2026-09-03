@@ -47,20 +47,20 @@
           </div>
         </div>
         <div class="ledger-cache mono">
-          <span>Cache</span>
+          <span>Installed models</span>
           <span id="cachePath" title="~/.yourstrulyai/models">~/.yourstrulyai/models</span>
-          <span id="cacheCount">0 GGUF</span>
+          <span id="cacheCount">0 installed</span>
         </div>
       </div>
 
       <div class="ledger-block local-block">
-        <div class="ledger-eyebrow mono">Local cache</div>
-        <div id="localList" class="local-list"><div class="empty mono">No GGUF yet — download a Perfect fit to start.</div></div>
+        <div class="ledger-eyebrow mono">Installed models</div>
+        <div id="localList" class="local-list"><div class="empty mono">No models installed — pick a Perfect fit from the catalog below and Download.</div></div>
         <button id="refreshLocal" class="ghost small mono" type="button">Refresh</button>
       </div>
 
       <div class="ledger-foot mono">
-        Quant = file size + VRAM. Q4_K_M ≈ 4.3 GB/B, Q8_0 ≈ 6.5 GB/B. K-quants trade size for quality.
+        Smaller quant = smaller file, less VRAM, slightly lower quality. Larger quant = bigger file, more VRAM, better quality.
       </div>
     </aside>
 

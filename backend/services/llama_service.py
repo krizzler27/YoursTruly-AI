@@ -30,12 +30,6 @@ def get_physical_cores() -> int:
     return max(1, (os.cpu_count() or 4) // 2)
 
 
-def get_models_dir() -> Path:
-    p = Path(config.LLAMA_MODEL_PATH).parent
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
 def get_total_ram_gb() -> float:
     if psutil is not None:
         try:
@@ -58,7 +52,7 @@ class LlamaEngine:
     _lock: Lock = Lock()
 
     def __init__(self, model_path: Optional[str] = None):
-        self.model_path = model_path or config.LLAMA_MODEL_PATH
+        self.model_path = model_path or config.LLAMA_MODEL
         self.llm = None  # llama_cpp.Llama
         self._generating = False
         self._gen_lock = Lock()
@@ -90,7 +84,7 @@ class LlamaEngine:
         if not mp.exists():
             raise FileNotFoundError(
                 f"Model not found at {self.model_path}. "
-                f"Place qwen2.5-3b-Q4_K_M.gguf in {get_models_dir()} "
+                f"Place qwen2.5-3b-Q4_K_M.gguf in {Path(config.LLAMA_MODEL_PATH)} "
                 f"or trigger auto-download."
             )
         # lazy import — allows spike without wheel installed
@@ -211,7 +205,7 @@ class LlamaEngine:
 
     def list_local_models(self) -> List[str]:
         """Scan ~/.yourstrulyai/models for *.gguf."""
-        d = get_models_dir()
+        d = Path(config.LLAMA_MODEL_PATH)
         try:
             return sorted([p.name for p in d.glob("*.gguf") if p.is_file()])
         except Exception:
