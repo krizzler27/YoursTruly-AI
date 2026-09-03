@@ -203,14 +203,6 @@ class LlamaEngine:
         finally:
             self._set_generating(False)
 
-    def list_local_models(self) -> List[str]:
-        """Scan ~/.yourstrulyai/models for *.gguf."""
-        d = Path(config.LLAMA_MODEL_PATH)
-        try:
-            return sorted([p.name for p in d.glob("*.gguf") if p.is_file()])
-        except Exception:
-            return []
-
     def health(self) -> Dict[str, object]:
         mp = Path(self.model_path)
         return {

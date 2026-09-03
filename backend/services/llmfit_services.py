@@ -204,6 +204,26 @@ class LLMFitServices:
             logger.warning("list_local failed %s: %s", self.models_dir, e)
             return []
 
+    def list_local_info(self) -> List[Dict[str, object]]:
+        """Detailed scan with size for Installed tab."""
+        try:
+            infos: List[Dict[str, object]] = []
+            for p in sorted(self.models_dir.glob("*.gguf"), key=lambda x: x.name.lower()):
+                if not p.is_file():
+                    continue
+                try:
+                    st = p.stat()
+                    size_gb = round(st.st_size / (1024**3), 2)
+                    mtime = st.st_mtime
+                except Exception:
+                    size_gb = 0
+                    mtime = 0
+                infos.append({"name": p.name, "size_gb": size_gb, "size_bytes": st.st_size if 'st' in locals() else 0, "modified": mtime})
+            return infos
+        except Exception as e:
+            logger.warning("list_local_info failed %s: %s", self.models_dir, e)
+            return []
+
     def list_remote_ggufs(self, model: str) -> Dict[str, Any]:
         """Run `llmfit download <model> --list` and return `{model, output, options}` of available quants."""
         if not model or not model.strip():

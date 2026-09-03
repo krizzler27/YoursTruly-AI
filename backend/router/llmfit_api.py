@@ -8,7 +8,6 @@ from pathlib import Path
 from config import config
 from schemas.api_schemas import CatalogRequest, ModelDownloadRequest, QuantsRequest, RecommendRequest, SORT_ALIASES
 from services.download_manager import DownloadManager
-from services.llama_service import LlamaEngine
 from services.llmfit_services import LLMFitServices
 
 router = APIRouter(prefix="/api", tags=["LLMFit"])
@@ -131,19 +130,21 @@ def list_quants(req: QuantsRequest):
 
 @router.get('/models', status_code=status.HTTP_200_OK)
 def models():
-    """List installed models — sync, filesystem only."""
+    """List installed models — via LLMFitServices (llmfit-owned)."""
     try:
-        engine = LlamaEngine.get_instance()
-        files = engine.list_local_models()
+        svc = LLMFitServices()
+        files = svc.list_local()
+        infos = svc.list_local_info()
         if not files:
             return JSONResponse(
                 content={
                     "message": f"No installed models in {Path(config.LLAMA_MODEL_PATH)}. Place qwen2.5-3b-Q4_K_M.gguf there or trigger download.",
                     "models": [],
+                    "details": [],
                     "path": str(Path(config.LLAMA_MODEL_PATH)),
                 }
             )
-        return JSONResponse(content={"models": files, "path": str(Path(config.LLAMA_MODEL_PATH))})
+        return JSONResponse(content={"models": files, "details": infos, "path": str(Path(config.LLAMA_MODEL_PATH))})
     except Exception as e:
         return JSONResponse(
             status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}

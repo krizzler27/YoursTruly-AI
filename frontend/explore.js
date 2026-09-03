@@ -12,9 +12,24 @@ const ramFill = $('#ramFill');
 const vramFill = $('#vramFill');
 const kpiRamMeta = $('#kpiRamMeta');
 const kpiVramMeta = $('#kpiVramMeta');
+const kpiCpuName = $('#kpiCpuName');
+const kpiTotalRam = $('#kpiTotalRam');
+const totalRamFill = $('#totalRamFill');
+const kpiTotalRamMeta = $('#kpiTotalRamMeta');
+const hwExtra = $('#hwExtra');
+const hardwareLoading = $('#hardwareLoading');
+const hwStack = $('#hwStack');
 const cachePath = $('#cachePath');
 const cacheCount = $('#cacheCount');
+const cacheTotalSize = $('#cacheTotalSize');
+const copyPathBtn = $('#copyPath');
 const localList = $('#localList');
+const installedLoading = $('#installedLoading');
+const catalogLoading = $('#catalogLoading');
+const deleteModal = $('#deleteModal');
+const deleteModalName = $('#deleteModalName');
+const deleteCancel = $('#deleteCancel');
+const deleteConfirm = $('#deleteConfirm');
 
 const grid = $('#catalogGrid');
 const countEl = $('#catalogCount');
@@ -22,11 +37,15 @@ const pathEl = $('#catalogPath');
 const statusEl = $('#catalogStatus');
 const emptyEl = $('#emptyCatalog');
 const providerBtn = $('#providerBtn');
+const providerBtnLabel = $('#providerBtnLabel');
 const providerMenu = $('#providerMenu');
 const providersWrap = $('#providersWrap');
 const searchEl = $('#search');
 const limitEl = $('#limit');
 const sortEl = $('#sort');
+const loadMoreWrap = $('#loadMoreWrap');
+const loadMoreBtn = $('#loadMore');
+const loadMoreInfo = $('#loadMoreInfo');
 const perfectOnlyEl = $('#perfectOnly');
 const includeCommunityEl = $('#includeCommunity');
 const toastStack = $('#toastStack');
@@ -35,11 +54,49 @@ const dockList = $('#dockList');
 const dockFab = $('#dockFab');
 const dockClose = $('#dockClose');
 
+const tabBtns = document.querySelectorAll('.tab-btn');
+const panels = {
+  hardware: document.getElementById('panel-hardware'),
+  explore: document.getElementById('panel-explore'),
+  installed: document.getElementById('panel-installed'),
+};
+
 const PROVIDERS = ['meta','alibaba','google','mistral','microsoft','deepseek'];
 let selectedProviders = new Set(PROVIDERS);
 let lastData = null;
+let displayed = 20;
+let currentFiltered = [];
 
-// --- Toast: info / success / warning / error ---
+// --- Tabs: Hardware | Explore (center) | Installed ---
+function switchTab(name, pushHash=true){
+  const n = panels[name] ? name : 'explore';
+  tabBtns.forEach(btn=>{
+    const isActive = btn.dataset.tab === n;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', String(isActive));
+  });
+  Object.entries(panels).forEach(([k, el])=>{
+    if(!el) return;
+    el.hidden = k !== n;
+  });
+  if(n === 'hardware') fetchSystem();
+  if(pushHash) {
+    const hash = n === 'explore' ? '#explore' : `#${n}`;
+    if(location.hash !== hash) history.replaceState(null, '', hash);
+  }
+}
+tabBtns.forEach(btn=> btn.addEventListener('click', ()=> switchTab(btn.dataset.tab)));
+window.addEventListener('hashchange', ()=>{
+  const h = location.hash.replace('#','');
+  if(panels[h]) switchTab(h, false);
+});
+// initial: hash or explore (center default)
+{
+  const h = location.hash.replace('#','');
+  switchTab(panels[h] ? h : 'explore', false);
+}
+
+// --- Toast ---
 function toast(msg, type='info', ttl){
   if(!toastStack) return;
   const el = document.createElement('div');
@@ -70,16 +127,30 @@ function toast(msg, type='info', ttl){
   el.addEventListener('mouseleave', ()=> t=setTimeout(dismiss, 1200));
 }
 function esc(s){ return s.replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
 function formatProvidersLabel(set){
-  if(!set || set.size===0 || set.size===PROVIDERS.length) return 'All';
+  if(!set || set.size===0) return 'None';
+  if(set.size===PROVIDERS.length) return 'All';
   const csv = [...set].join(', ');
-  // truncate to fit button ~14 chars; actual overflow also handled by CSS
   if(csv.length > 14) return csv.slice(0,10).trimEnd() + '…';
   return csv;
 }
 function renderProviderMenu(){
   providerMenu.innerHTML='';
+  const actions = document.createElement('div');
+  actions.className = 'provider-actions';
+  const allBtn = document.createElement('button');
+  allBtn.type='button'; allBtn.className='ghost small mono'; allBtn.textContent='All';
+  allBtn.addEventListener('click', (e)=>{ e.stopPropagation(); selectedProviders=new Set(PROVIDERS); renderProviderMenu(); });
+  const noneBtn = document.createElement('button');
+  noneBtn.type='button'; noneBtn.className='ghost small mono'; noneBtn.textContent='None';
+  noneBtn.addEventListener('click', (e)=>{ e.stopPropagation(); selectedProviders=new Set(); renderProviderMenu(); });
+  actions.append(allBtn, noneBtn);
+  providerMenu.appendChild(actions);
+  const divider = document.createElement('div');
+  divider.style.cssText='height:1px;background:var(--lab-border);margin:6px 0';
+  providerMenu.appendChild(divider);
   PROVIDERS.forEach(p=>{
     const label=document.createElement('label');
     label.className='provider-option mono';
@@ -89,24 +160,23 @@ function renderProviderMenu(){
     cb.checked=selectedProviders.has(p);
     cb.addEventListener('change', ()=>{
       if(cb.checked) selectedProviders.add(p); else selectedProviders.delete(p);
-      providerBtn.textContent=formatProvidersLabel(selectedProviders);
-      providerBtn.title=[...selectedProviders].join(', ') || 'All';
+      const lbl = formatProvidersLabel(selectedProviders);
+      if(providerBtnLabel) providerBtnLabel.textContent = lbl; else providerBtn.textContent = lbl;
+      providerBtn.title=[...selectedProviders].join(', ') || 'None';
+      if(providersWrap) providersWrap.title = providerBtn.title;
     });
     const span=document.createElement('span');
     span.textContent=p;
     label.append(cb, span);
     providerMenu.appendChild(label);
   });
-  providerBtn.textContent=formatProvidersLabel(selectedProviders);
-  providerBtn.title=[...selectedProviders].join(', ') || 'All';
+  const lbl = formatProvidersLabel(selectedProviders);
+  if(providerBtnLabel) providerBtnLabel.textContent = lbl; else providerBtn.textContent = lbl;
+  providerBtn.title=[...selectedProviders].join(', ') || 'None';
+  if(providersWrap) providersWrap.title = providerBtn.title;
 }
-function getSelectedProviders(){
-  return [...selectedProviders];
-}
-function resetProviders(){
-  selectedProviders=new Set(PROVIDERS);
-  renderProviderMenu();
-}
+function getSelectedProviders(){ return [...selectedProviders]; }
+function resetProviders(){ selectedProviders=new Set(PROVIDERS); renderProviderMenu(); }
 function toggleProviderMenu(force){
   const willOpen = typeof force==='boolean' ? force : providerMenu.hidden;
   providerMenu.hidden=!willOpen;
@@ -114,19 +184,13 @@ function toggleProviderMenu(force){
   providersWrap.classList.toggle('open', willOpen);
 }
 
-// --- Download dock: single non-blocking + polling (3s active, 0 grace) ---
-let dockJobs = new Map(); // job_id -> job
+// --- Download dock ---
+let dockJobs = new Map();
 let dockPollTimer = null;
 let dockGraceTimer = null;
 let dockMinimized = false;
-
-function stopDockPolling(){
-  if(dockPollTimer){ clearInterval(dockPollTimer); dockPollTimer=null; }
-}
-function clearGrace(){
-  if(dockGraceTimer){ clearTimeout(dockGraceTimer); dockGraceTimer=null; }
-}
-
+function stopDockPolling(){ if(dockPollTimer){ clearInterval(dockPollTimer); dockPollTimer=null; } }
+function clearGrace(){ if(dockGraceTimer){ clearTimeout(dockGraceTimer); dockGraceTimer=null; } }
 function ensureDockPolling(){
   clearGrace();
   if(dockPollTimer) return;
@@ -147,7 +211,6 @@ function ensureDockPolling(){
       renderDock();
       const stillActive = jobs.some(j=> j.status==='queued' || j.status==='downloading');
       if(!stillActive){
-        // static 30s grace: stop polling, keep dock visible from cached dockJobs, then auto-clear
         stopDockPolling();
         clearGrace();
         dockGraceTimer = setTimeout(()=>{
@@ -159,7 +222,6 @@ function ensureDockPolling(){
     }catch{}
   }, 3000);
 }
-
 function renderDock(){
   const jobs = [...dockJobs.values()].sort((a,b)=> new Date(b.created_at)-new Date(a.created_at));
   const activeCount = jobs.filter(j=> j.status==='queued'||j.status==='downloading').length;
@@ -208,7 +270,6 @@ function renderDock(){
       </div>
     </div>`;
   }).join('');
-  // bind cancel
   dockList.querySelectorAll('[data-cancel]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const id = btn.getAttribute('data-cancel');
@@ -219,17 +280,14 @@ function renderDock(){
         const d = await r.json().catch(()=>({}));
         if(!r.ok) toast(d.detail||'Cancel failed','error');
         else toast('Cancelled download','warning');
-        // refresh immediately
         const r2 = await fetch(`${API_BASE}/api/downloads`);
         if(r2.ok){ const dd=await r2.json(); dd.jobs.forEach(j=>dockJobs.set(j.id,j)); renderDock(); }
       }catch(e){ toast(e.message||'Cancel failed','error'); }
       finally{ btn.disabled=false; }
     });
   });
-  // also update per-card buttons if catalog visible
   updateCardButtons(jobs);
 }
-
 function updateCardButtons(jobs){
   const byRepo = new Map();
   jobs.forEach(j=>{ if(j.status==='queued'||j.status==='downloading') byRepo.set(j.repo_id, j); });
@@ -240,7 +298,6 @@ function updateCardButtons(jobs){
       btn.disabled = true;
       btn.textContent = job.status==='queued' ? 'Queued…' : `Downloading ${job.progress||0}%`;
     } else {
-      // only re-enable if not handled by current active job; leave completed as Download
       if(btn.dataset._busy) {
         btn.disabled=false;
         btn.textContent='Download';
@@ -249,18 +306,7 @@ function updateCardButtons(jobs){
     }
   });
 }
-
-function showDock(){
-  dockMinimized=false;
-  renderDock();
-}
-function hideDockToFab(){
-  dockMinimized=true;
-  downloadDock.hidden=true;
-  dockFab.hidden = dockJobs.size===0;
-}
-
-// dock controls — only X closes to fab
+function showDock(){ dockMinimized=false; renderDock(); }
 if(dockClose) dockClose.addEventListener('click', ()=>{
   clearGrace(); stopDockPolling();
   dockMinimized=true;
@@ -270,44 +316,63 @@ if(dockClose) dockClose.addEventListener('click', ()=>{
 if(dockFab) dockFab.addEventListener('click', showDock);
 
 async function fetchSystem(){
+  if(hardwareLoading) hardwareLoading.hidden = false;
+  if(hwStack) hwStack.hidden = true;
   try{
     const r=await fetch(`${API_BASE}/api/system`);
     if(!r.ok) throw new Error();
     const j=await r.json();
     const sys=j.system || j.raw?.system || {};
-    // llmfit keys: available_ram_gb (free now), total_ram_gb, gpu_vram_gb, backend/has_gpu
-    const ramAvail = sys.available_ram_gb ?? sys.memory_available_gb ?? sys.ram_gb ?? 0;
+    const ramAvail = sys.available_ram_gb ?? sys.memory_available_gb ?? 0;
     const ramTotal = sys.total_ram_gb ?? 0;
-    const vram = sys.gpu_vram_gb ?? sys.vram_gb ?? sys.gpus?.[0]?.vram_gb ?? sys.gpu?.vram_gb ?? 0;
-    const cores = sys.cpu_cores ?? sys.cores ?? sys.cpu?.cores ?? '—';
-    const gpu = sys.gpu_name ?? sys.gpu?.name ?? sys.gpus?.[0]?.name ?? 'none';
-    // dGPU = discrete (separate card, own VRAM/GDDR). iGPU = integrated inside CPU (shares system RAM, like 660M). Keep label VRAM — apt for both.
-    const hasGpu = !!(sys.has_gpu ?? sys.gpu_available_gb ?? sys.gpus?.length);
-    const backend = sys.backend ?? sys.gpus?.[0]?.backend ?? '';
-    const mode = hasGpu && backend ? `${backend}` : hasGpu ? 'GPU' : 'CPU';
-    hwDot.classList.remove('off');
-    hwStatus.textContent = 'hardware ready';
-    kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
-    kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
-    kpiCores.textContent = String(cores);
-    kpiGpu.textContent = String(gpu).slice(0,22);
-    kpiMode.textContent = String(mode);
-    // bars: ram fill as available vs total (if total known)
+    const vram = sys.gpu_vram_gb ?? sys.vram_gb ?? sys.gpus?.[0]?.vram_gb ?? 0;
+    const cores = sys.cpu_cores ?? '—';
+    const cpuName = sys.cpu_name ?? '—';
+    const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '—';
+    if(hwDot) hwDot.classList.remove('off');
+    if(hwStatus) hwStatus.textContent = 'hardware ready';
+    if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
+    if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
+    if(kpiCores) kpiCores.textContent = String(cores);
+    if(kpiGpu) kpiGpu.textContent = String(gpu).slice(0,28);
+    if(kpiCpuName) kpiCpuName.textContent = String(cpuName);
+    if(kpiTotalRam) kpiTotalRam.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB` : '—';
     const ramBase = Number(ramTotal) || 16;
     const ramPct = Math.min(100, (Number(ramAvail)||8)/ramBase*100);
-    ramFill.style.width = ramPct + '%';
-    ramFill.className = ramPct > 85 ? 'over' : '';
+    if(ramFill){ ramFill.style.width = ramPct + '%'; ramFill.className = ramPct > 85 ? 'over' : ''; }
+    if(totalRamFill){ totalRamFill.style.width = '100%'; }
+    if(kpiTotalRamMeta) kpiTotalRamMeta.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB installed` : 'installed';
     const vramPct = vram ? Math.min(100, Number(vram)/ramBase*100) : 35;
-    vramFill.style.width = vramPct + '%';
-    kpiRamMeta.textContent = ramTotal ? `${Number(ramAvail).toFixed(1)} free / ${Number(ramTotal).toFixed(1)} total` : `available for model`;
-    kpiVramMeta.textContent = vram ? `VRAM for offload` : `CPU only`;
+    if(vramFill) vramFill.style.width = vramPct + '%';
+    if(kpiRamMeta) kpiRamMeta.textContent = ramTotal ? `${Number(ramAvail).toFixed(1)} free / ${Number(ramTotal).toFixed(1)} total` : `available`;
+    if(kpiVramMeta) kpiVramMeta.textContent = vram ? `${vram} GB VRAM` : `CPU only`;
+    // extra chips for remaining meaningful fields (gpu count now in detail grid)
+    if(hwExtra){
+      hwExtra.innerHTML = '';
+      const chips = [];
+      if(sys.gpu_available_gb != null) chips.push(`GPU free ${sys.gpu_available_gb} GB`);
+      if(sys.memory_bandwidth_gbps || sys.gpus?.[0]?.memory_bandwidth_gbps) chips.push(`BW ${sys.memory_bandwidth_gbps ?? sys.gpus[0].memory_bandwidth_gbps} GB/s`);
+      chips.forEach(c=>{
+        const s=document.createElement('span');
+        s.textContent=c;
+        hwExtra.appendChild(s);
+      });
+      if(!chips.length) hwExtra.textContent = '';
+    }
+    if(hardwareLoading) hardwareLoading.hidden = true;
+    if(hwStack) hwStack.hidden = false;
   }catch{
-    hwDot.classList.add('off');
-    hwStatus.textContent = 'offline — llmfit not found';
+    if(hwDot) hwDot.classList.add('off');
+    if(hwStatus) hwStatus.textContent = 'offline — llmfit not found';
+    if(kpiCpuName) kpiCpuName.textContent='—';
+    if(hardwareLoading) hardwareLoading.hidden = true;
+    if(hwStack) hwStack.hidden = false;
   }
 }
 
-let installedSet = new Set(); // lowercased gguf filenames for isInstalled check
+let installedSet = new Set();
+let installedDetails = [];
+let pendingDeleteFile = null;
 function isRepoInstalled(repo, quant){
   if(!repo || !installedSet.size) return false;
   const rb = repo.split('/').pop().toLowerCase().replace(/-gguf$/,'').replace(/\.gguf$/,'');
@@ -326,7 +391,7 @@ function isRepoInstalled(repo, quant){
 }
 function refreshInstalledButtons(){
   document.querySelectorAll('.download').forEach(btn=>{
-    if(btn.dataset.installed==='1') return; // already marked
+    if(btn.dataset.installed==='1') return;
     const repo=btn.dataset.repo, quant=btn.dataset.quant;
     if(isRepoInstalled(repo, quant)){
       btn.textContent='✓ Installed';
@@ -340,31 +405,42 @@ function refreshInstalledButtons(){
   });
 }
 async function fetchLocal(){
+  if(localList && !localList.querySelector('.loading-state')){
+    localList.innerHTML = '<div class="loading-state mono"><div class="spinner small"></div><span>Checking installed models…</span></div>';
+  }
   try{
     const r=await fetch(`${API_BASE}/api/models`);
     const j=await r.json();
     const models=j.models||[];
-    installedSet = new Set(models.map(m=>m.toLowerCase()));
-    cachePath.textContent=j.path||'~/.yourstrulyai/models';
-    cacheCount.textContent=`${models.length} installed`;
+    const details=j.details||[];
+    installedSet = new Set(models.map(m=>String(m).toLowerCase()));
+    installedDetails = details;
+    if(cachePath) cachePath.textContent=j.path||'~/.yourstrulyai/models';
+    const countText = `${models.length} model${models.length===1?'':'s'}`;
+    if(cacheCount) cacheCount.textContent=countText;
+    if(cacheTotalSize){
+      const total = details.reduce((s,d)=> s + (Number(d.size_gb)||0), 0);
+      cacheTotalSize.textContent = models.length ? `• ${total.toFixed(2)} GB total` : '';
+    }
     if(!models.length){
-      localList.innerHTML='<div class="empty mono">No models installed — pick a Perfect fit from the catalog below and Download.</div>';
+      localList.innerHTML='<div class="empty mono">No models installed — go to Explore and Download a Perfect fit.</div>';
     } else {
+      const sizeMap = new Map(details.map(d=>[d.name, d.size_gb]));
+      const mtimeMap = new Map(details.map(d=>[d.name, d.modified]));
       localList.innerHTML='';
       models.forEach(name=>{
+        const size = sizeMap.get(name);
         const div=document.createElement('div');
         div.className='local-item';
-        div.innerHTML=`<span>${esc(name)}</span><button type="button" data-file="${esc(name)}">Delete</button>`;
-        div.querySelector('button').addEventListener('click', async ()=>{
-          if(!confirm(`Delete ${name}?`)) return;
-          const del=await fetch(`${API_BASE}/api/models/${encodeURIComponent(name)}`,{method:'DELETE'});
-          const dj=await del.json().catch(()=>({}));
-          if(!del.ok) toast(dj.detail||'Delete failed','error');
-          else { toast('Deleted ' + name,'success'); }
-          await fetchLocal();
-          // re-enable catalog buttons after delete
-          document.querySelectorAll('.download[data-installed]').forEach(b=>{ delete b.dataset.installed; b.disabled=false; b.textContent='Download'; b.title=''; b.style.background=''; b.style.borderColor=''; b.style.opacity=''; });
-          refreshInstalledButtons();
+        const sizeLabel = size != null ? `${size} GB` : '';
+        const dateLabel = mtimeMap.get(name) ? new Date(mtimeMap.get(name)*1000).toLocaleDateString() : '';
+        const meta = [sizeLabel, dateLabel].filter(Boolean).join(' • ');
+        div.innerHTML=`<div class="local-item-main"><span class="local-item-name">${esc(name)}</span><span class="local-item-meta">${esc(meta)}</span></div><button type="button" data-file="${esc(name)}">Delete</button>`;
+        div.querySelector('button').addEventListener('click', ()=>{
+          pendingDeleteFile = name;
+          if(deleteModalName) deleteModalName.textContent = name;
+          if(deleteModal && typeof deleteModal.showModal === 'function') deleteModal.showModal();
+          else if(deleteModal) deleteModal.setAttribute('open','');
         });
         localList.appendChild(div);
       });
@@ -374,6 +450,23 @@ async function fetchLocal(){
     localList.innerHTML='<div class="empty mono">Could not load installed models.</div>';
   }
 }
+async function handleDeleteConfirm(){
+  const name = pendingDeleteFile;
+  if(!name) return;
+  try{
+    const del=await fetch(`${API_BASE}/api/models/${encodeURIComponent(name)}`,{method:'DELETE'});
+    const dj=await del.json().catch(()=>({}));
+    if(!del.ok) toast(dj.detail||'Delete failed','error');
+    else { toast('Deleted ' + name,'success'); }
+    await fetchLocal();
+    document.querySelectorAll('.download[data-installed]').forEach(b=>{ delete b.dataset.installed; b.disabled=false; b.textContent='Download'; b.title=''; b.style.background=''; b.style.borderColor=''; b.style.opacity=''; });
+    refreshInstalledButtons();
+  } finally {
+    pendingDeleteFile = null;
+    if(deleteModal && typeof deleteModal.close === 'function') try{ deleteModal.close(); }catch{}
+    if(deleteModal) deleteModal.removeAttribute('open');
+  }
+}
 
 function fitClass(lvl){
   const s=String(lvl||'').toLowerCase();
@@ -381,16 +474,14 @@ function fitClass(lvl){
   if(s==='good'||s==='marginal'||s==='runnable') return 'runnable';
   return 'other';
 }
-
 function cardTemplate(m){
   const lvl=fitClass(m.fit_level);
-  const pct = lvl==='perfect' ? 92 : lvl==='runnable' ? 62 : 28;
   const sources = (m.gguf_sources||[]).map(g=>g.repo).join(', ') || '';
   const repo = m.hf_repo || (m.gguf_sources?.[0]?.repo) || m.name || '';
   const quant = m.quant || m.best_quant || '';
   const tps = m.tps ? `${m.tps} tok/s` : '—';
   const vram = m.vram_gb ? `${m.vram_gb} GB` : '—';
-  const disk = m.disk_size_gb ? `${m.disk_size_gb} GB` : vram;
+  const disk = m.disk_size_gb ? `${m.disk_size_gb} GB` : '—';
   const name = esc(m.name||'');
   const provider = esc(m.provider||'');
   const already = isRepoInstalled(repo, quant);
@@ -399,25 +490,20 @@ function cardTemplate(m){
   const btnInstalled = already ? ' data-installed="1"' : '';
   const btnTitle = already ? ' title="Already installed"' : '';
   return `
-  <article class="card" tabindex="0" aria-label="${name}">
-    <div class="card-tape" aria-hidden="true"><div class="tape-fit ${lvl}">${lvl}</div></div>
-    <div class="card-body">
+  <article class="card ${lvl}" tabindex="0" aria-label="${name}">
       <div class="card-head">
-        <div><div class="card-title">${name}</div><div class="card-provider">${provider} • ${esc(quant)} • ${esc(m.run_mode||'')}</div></div>
-        <div class="card-badges"><span class="badge ${lvl}">${esc(m.fit_level||'')}</span><span class="badge gpu">${esc(m.run_mode||'GPU')}</span></div>
+        <div><div class="card-title">${name}</div><div class="card-provider">${provider} • ${esc(quant)}</div></div>
+        <span class="badge ${lvl}">${esc(m.fit_level||'')}</span>
       </div>
       <div class="card-stats">
-        <div class="stat"><span>Disk</span><strong>${esc(disk)}</strong></div>
-        <div class="stat"><span>VRAM need</span><strong>${esc(vram)}</strong></div>
-        <div class="stat"><span>Est. speed</span><strong>${esc(tps)}</strong></div>
+        <span><strong>${esc(disk)}</strong> disk</span>
+        <span><strong>${esc(vram)}</strong> VRAM</span>
+        <span><strong>${esc(tps)}</strong></span>
       </div>
-      <div class="fit-bar" aria-hidden="true"><i class="${lvl}" style="width:${pct}%"></i></div>
       <div class="card-foot">
         <small title="${esc(sources)}">${repo ? esc(repo) : 'repo via llmfit'}</small>
         <button class="download" type="button" data-repo="${esc(repo)}" data-quant="${esc(quant)}"${btnDisabled}${btnInstalled}${btnTitle}>${btnLabel}</button>
       </div>
-      <span class="stub">tear to install →</span>
-    </div>
   </article>`;
 }
 
@@ -426,17 +512,119 @@ function applyClientFilters(models){
   if(!q) return models;
   return models.filter(m=> (m.name+' '+m.provider+' '+m.quant).toLowerCase().includes(q));
 }
-
-async function fetchCatalog(){
-  grid.innerHTML='<div class="skeleton mono">Probing llmfit catalog…</div>';
+function updateLoadMore(){
+  if(!loadMoreWrap) return;
+  if(!currentFiltered.length || displayed >= currentFiltered.length){
+    loadMoreWrap.hidden = true;
+    return;
+  }
+  loadMoreWrap.hidden = false;
+  if(loadMoreInfo) loadMoreInfo.textContent = `Showing ${Math.min(displayed, currentFiltered.length)} of ${currentFiltered.length}`;
+}
+function renderCatalogFromLast(){
+  if(!lastData) return;
+  const models=lastData.models||[];
+  const filtered=applyClientFilters(models);
+  currentFiltered = filtered;
+  if(countEl) countEl.textContent=`${filtered.length} models • ${lastData.meta?.total ?? models.length} total`;
+  if(!filtered.length){
+    grid.innerHTML='';
+    emptyEl.hidden=false;
+    if(loadMoreWrap) loadMoreWrap.hidden=true;
+    return;
+  }
   emptyEl.hidden=true;
-  statusEl.textContent='loading…';
-  const providers = getSelectedProviders();
+  const slice = filtered.slice(0, displayed);
+  grid.innerHTML=slice.map(cardTemplate).join('');
+  bindDownloadButtons();
+  refreshInstalledButtons();
+  const jobs = [...dockJobs.values()].filter(j=> j.status==='queued'||j.status==='downloading');
+  if(jobs.length) updateCardButtons(jobs);
+  updateLoadMore();
+}
+function handleLoadMore(){
+  displayed += 10;
+  const slice = currentFiltered.slice(0, displayed);
+  grid.innerHTML=slice.map(cardTemplate).join('');
+  bindDownloadButtons();
+  refreshInstalledButtons();
+  const jobs = [...dockJobs.values()].filter(j=> j.status==='queued'||j.status==='downloading');
+  if(jobs.length) updateCardButtons(jobs);
+  updateLoadMore();
+}
+function bindDownloadButtons(){
+  grid.querySelectorAll('.download').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const repo=btn.dataset.repo;
+      const quant=btn.dataset.quant;
+      if(!repo){ toast('No repo for this model — try search','warning'); return; }
+      if(btn.disabled) return;
+      btn.disabled=true;
+      btn.dataset._busy='1';
+      const prev=btn.textContent;
+      btn.textContent='Queued…';
+      try{
+        const resp=await fetch(`${API_BASE}/api/models/download`,{
+          method:'POST',
+          headers:{'content-type':'application/json'},
+          body: JSON.stringify({repo_id: repo, quant: quant || undefined})
+        });
+        const data=await resp.json().catch(()=>({}));
+        if(resp.status===202 && data.job_id){
+          const job = data.job || {id:data.job_id, repo_id:repo, quant, status:'queued', progress:0, created_at: new Date().toISOString()};
+          dockJobs.set(job.id, job);
+          ensureDockPolling();
+          renderDock();
+          showDock();
+          toast(`Queued download: ${repo} ${quant ? '('+quant+')' : ''}`, 'info');
+        } else if(resp.status===409) {
+          const isInstalled = (data.detail||'').includes('already installed');
+          throw new Error(data.detail || (isInstalled ? 'Model already installed' : 'A download is already in progress — please wait'));
+        } else if(!resp.ok) {
+          throw new Error(data.detail || data['Exception occured'] || `HTTP ${resp.status}`);
+        } else {
+          toast(`Saved to ${data.path || repo}`, 'success');
+          fetchLocal();
+          btn.disabled=false;
+          btn.textContent=prev;
+          delete btn.dataset._busy;
+        }
+      }catch(e){
+        const msg = e.message || 'Download failed';
+        const type = msg.includes('already in progress') ? 'warning' : msg.includes('already installed') ? 'warning' : 'error';
+        if(msg.includes('already installed')){
+          btn.textContent='✓ Installed';
+          btn.disabled=true;
+          btn.dataset.installed='1';
+          btn.style.background='var(--lab-moss)';
+          btn.style.borderColor='var(--lab-moss)';
+        } else {
+          btn.disabled=false;
+          btn.textContent=prev;
+          delete btn.dataset._busy;
+        }
+        toast(msg, type);
+      }
+    });
+  });
+}
+async function fetchCatalog(){
+  grid.innerHTML='<div class="loading-state mono"><div class="spinner"></div><span>Loading models…</span></div>';
+  emptyEl.hidden=true;
+  if(statusEl) statusEl.textContent='';
+  if(loadMoreWrap) loadMoreWrap.hidden=true;
+  displayed = 20;
+  let providers = getSelectedProviders();
+  let includeCommunity = !!includeCommunityEl.checked;
+  if(providers.length===0){
+    providers = null;
+    includeCommunity = true;
+  }
   const body = {
-    limit: parseInt(limitEl.value,10) || 20,
+    limit: 100,
     sort: sortEl.value,
     perfect_only: !!perfectOnlyEl.checked,
-    include_community: !!includeCommunityEl.checked,
+    include_community: includeCommunity,
     providers: providers,
   };
   try{
@@ -450,81 +638,28 @@ async function fetchCatalog(){
     lastData=j;
     const models=j.models||[];
     const filtered=applyClientFilters(models);
-    countEl.textContent=`${filtered.length} of ${models.length} models • ${j.meta?.total ?? models.length} total`;
-    pathEl.textContent=j.meta?.cmd ? '' : '';
-    statusEl.textContent='';
+    currentFiltered = filtered;
+    if(countEl) countEl.textContent=`${filtered.length} models • ${j.meta?.total ?? models.length} total`;
+    if(pathEl) pathEl.textContent='';
+    if(statusEl) statusEl.textContent='';
     if(!filtered.length){
       grid.innerHTML='';
       emptyEl.hidden=false;
+      if(loadMoreWrap) loadMoreWrap.hidden=true;
       return;
     }
-    grid.innerHTML=filtered.map(cardTemplate).join('');
-    // animate fit bars after paint
-    requestAnimationFrame(()=> {
-      grid.querySelectorAll('.fit-bar i').forEach(el=>{
-        const w=el.style.width;
-        el.style.width='0';
-        requestAnimationFrame(()=> el.style.width=w);
-      });
-    });
-    // bind downloads — non-blocking: POST 202 returns job_id, dock polls progress
-    grid.querySelectorAll('.download').forEach(btn=>{
-      btn.addEventListener('click', async ()=>{
-        const repo=btn.dataset.repo;
-        const quant=btn.dataset.quant;
-        if(!repo){ toast('No repo for this model — try search','warning'); return; }
-        if(btn.disabled) return;
-        btn.disabled=true;
-        btn.dataset._busy='1';
-        const prev=btn.textContent;
-        btn.textContent='Queued…';
-        try{
-          const resp=await fetch(`${API_BASE}/api/models/download`,{
-            method:'POST',
-            headers:{'content-type':'application/json'},
-            body: JSON.stringify({repo_id: repo, quant: quant || undefined})
-          });
-          const data=await resp.json().catch(()=>({}));
-          if(resp.status===202 && data.job_id){
-            const job = data.job || {id:data.job_id, repo_id:repo, quant, status:'queued', progress:0, created_at: new Date().toISOString()};
-            dockJobs.set(job.id, job);
-            ensureDockPolling();
-            renderDock();
-            showDock();
-            toast(`Queued download: ${repo} ${quant ? '('+quant+')' : ''}`, 'info');
-          } else if(resp.status===409) {
-            const isInstalled = (data.detail||'').includes('already installed');
-            throw new Error(data.detail || (isInstalled ? 'Model already installed' : 'A download is already in progress — please wait'));
-          } else if(!resp.ok) {
-            throw new Error(data.detail || data['Exception occured'] || `HTTP ${resp.status}`);
-          } else {
-            toast(`Saved to ${data.path || repo}`, 'success');
-            fetchLocal();
-            btn.disabled=false;
-            btn.textContent=prev;
-            delete btn.dataset._busy;
-          }
-        }catch(e){
-          const msg = e.message || 'Download failed';
-          const type = msg.includes('already in progress') ? 'warning' : msg.includes('already installed') ? 'warning' : 'error';
-          if(msg.includes('already installed')){
-            btn.textContent='✓ Installed';
-            btn.disabled=true;
-            btn.dataset.installed='1';
-            btn.style.background='var(--lab-moss)';
-            btn.style.borderColor='var(--lab-moss)';
-          } else {
-            btn.disabled=false;
-            btn.textContent=prev;
-            delete btn.dataset._busy;
-          }
-          toast(msg, type);
-        }
-      });
-    });
+    emptyEl.hidden=true;
+    const slice = filtered.slice(0, displayed);
+    grid.innerHTML=slice.map(cardTemplate).join('');
+    bindDownloadButtons();
+    refreshInstalledButtons();
+    const jobs = [...dockJobs.values()].filter(j=> j.status==='queued'||j.status==='downloading');
+    if(jobs.length) updateCardButtons(jobs);
+    updateLoadMore();
   }catch(e){
     grid.innerHTML=`<div class="empty mono">Could not load catalog. ${esc(e.message||'')}</div>`;
-    statusEl.textContent='error';
+    if(statusEl) statusEl.textContent='error';
+    if(loadMoreWrap) loadMoreWrap.hidden=true;
   }
 }
 
@@ -534,25 +669,58 @@ $('#resetFilters').addEventListener('click', ()=>{
   searchEl.value='';
   perfectOnlyEl.checked=true;
   includeCommunityEl.checked=false;
-  limitEl.value='20';
+  if(limitEl) limitEl.value='100';
+  displayed = 20;
   sortEl.value='score';
   resetProviders();
   fetchCatalog();
 });
-searchEl.addEventListener('keydown', e=>{ if(e.key==='Enter') fetchCatalog(); });
+if(loadMoreBtn) loadMoreBtn.addEventListener('click', handleLoadMore);
+const debouncedRender = debounce(()=> renderCatalogFromLast(), 250);
+searchEl.addEventListener('input', debouncedRender);
+searchEl.addEventListener('keydown', e=>{ if(e.key==='Enter') { e.preventDefault(); fetchCatalog(); }});
 $('#refreshLocal').addEventListener('click', fetchLocal);
-providerBtn.addEventListener('click', ()=> toggleProviderMenu());
+function handleProvidersToggle(e){
+  e.preventDefault();
+  e.stopPropagation();
+  toggleProviderMenu();
+}
+providerBtn.addEventListener('click', handleProvidersToggle);
+if(providersWrap){
+  providersWrap.addEventListener('click', (e)=>{
+    if(providerMenu.contains(e.target)) return;
+    handleProvidersToggle(e);
+  });
+}
 document.addEventListener('click', (e)=>{
   if(!providersWrap.contains(e.target)) toggleProviderMenu(false);
 });
 providerMenu.addEventListener('click', e=> e.stopPropagation());
+if(copyPathBtn) copyPathBtn.addEventListener('click', async ()=>{
+  const txt = cachePath ? cachePath.textContent : '';
+  try{
+    if(navigator.clipboard && txt) await navigator.clipboard.writeText(txt);
+    else if(txt){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    toast('Path copied','success',2000);
+  }catch{ toast('Copy failed','error'); }
+});
+if(deleteCancel) deleteCancel.addEventListener('click', ()=>{
+  pendingDeleteFile=null;
+  if(deleteModal && typeof deleteModal.close==='function') try{ deleteModal.close(); }catch{}
+  if(deleteModal) deleteModal.removeAttribute('open');
+});
+if(deleteConfirm) deleteConfirm.addEventListener('click', (e)=>{ e.preventDefault(); handleDeleteConfirm(); });
+if(deleteModal) deleteModal.addEventListener('click', (e)=>{
+  if(e.target===deleteModal){ pendingDeleteFile=null; try{ deleteModal.close(); }catch{} deleteModal.removeAttribute('open'); }
+});
+if(deleteModal) deleteModal.addEventListener('cancel', (e)=>{ e.preventDefault(); pendingDeleteFile=null; try{ deleteModal.close(); }catch{} });
 
 renderProviderMenu();
 fetchSystem();
 fetchLocal();
 fetchCatalog();
 
-// restore existing downloads on load (if any) and start polling
+// restore existing downloads on load
 (async ()=>{
   try{
     const r = await fetch(`${API_BASE}/api/downloads`);

@@ -155,13 +155,14 @@ async function checkModelHealth() {
   } catch { return false; }
 }
 
-async function fetchModels() {
+async function fetchModels(forcedHealthy = null) {
+  let healthy = forcedHealthy;
   try {
     const r = await fetch(`${API_BASE}/api/models`, { headers: { 'accept': 'application/json' } });
     if (!r.ok) throw new Error('no models');
     const data = await r.json();
     const models = data.models || [];
-    const healthy = await checkModelHealth();
+    if (healthy === null) healthy = await checkModelHealth();
     if (models.length) {
       setStatus(healthy, healthy ? 'MODEL READY' : 'MODEL OFFLINE');
       renderModelMenu(models);
@@ -172,13 +173,14 @@ async function fetchModels() {
       hint.removeAttribute('hidden');
       setModelPillDisabled(!healthy);
       if (!healthy) modelNameEl.textContent = selectedModel + ' (loading)';
-      return;
+      return healthy;
     }
     setStatus(healthy, healthy ? 'no models — add GGUF to ' + (data.path || '~/.yourstrulyai/models') : 'MODEL OFFLINE');
     hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
     hint.style.display = '';
     hint.removeAttribute('hidden');
     setModelPillDisabled(true);
+    return healthy;
   } catch (e) {
     setStatus(false, 'MODEL OFFLINE');
     hint.textContent = '';
@@ -187,6 +189,7 @@ async function fetchModels() {
     setModelPillDisabled(true);
     modelNameEl.textContent = 'offline';
     modelMenu.innerHTML = `<div class="mono" style="padding:8px 10px; color:var(--muted-foreground)">Model offline — check ~/.yourstrulyai/models</div>`;
+    return false;
   }
 }
 
@@ -411,7 +414,7 @@ async function pollHealth() {
   const healthy = await checkModelHealth();
   if (healthy === lastHealthy) return;
   lastHealthy = healthy;
-  await fetchModels();
+  await fetchModels(healthy);
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -419,12 +422,12 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', pollHealth);
 
-// Init
+// Init — single health check via fetchModels (no duplicate)
 (async () => {
   await loadConversations();
   renderHistory();
-  await fetchModels();
-  try { lastHealthy = await checkModelHealth(); } catch {}
+  const h = await fetchModels();
+  lastHealthy = h;
   autoResize();
   if (!currentConversationId) showEmpty(true);
   setInterval(pollHealth, 10000);
