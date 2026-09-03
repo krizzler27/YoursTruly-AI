@@ -3,16 +3,18 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "localai"
+name = "YoursTruly-AI"
 version = "0.1.0"
-description = "Local-first private AI assistant on SLMs, self-hosted via Ollama"
-requires-python = ">=3.11"
+description = "Local-first private AI assistant on SLMs, inference with llama.cpp"
+requires-python = "==3.11.*"
 dependencies = [
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "huggingface-hub",
     "jinja2>=3.1.6",
     "langgraph>=1.2.11",
-    "litellm>=1.98.0",
+    "llama-cpp-python>=0.3.35",
+    "psutil",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "sqlalchemy>=2.0.52",
@@ -22,3 +24,10 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 only-include = ["config.py", "main.py", "router", "services", "db", "schemas", "repository", "prompts"]
+
+[tool.uv.sources]
+llama-cpp-python = { index = "llama-vulkan" }
+
+[[tool.uv.index]]
+name = "llama-vulkan"
+url = "https://abetlen.github.io/llama-cpp-python/whl/vulkan"

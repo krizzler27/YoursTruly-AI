@@ -146,47 +146,50 @@ function updateAssistantCard(card, content, done=false) {
   thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
 }
 
-async function checkOllamaHealth() {
+async function checkModelHealth() {
   try {
-    const r = await fetch(`${API_BASE}/api/health/ollama`, { headers: { 'accept': 'application/json' } });
+    const r = await fetch(`${API_BASE}/api/health`, { headers: { 'accept': 'application/json' } });
     if (!r.ok) return false;
     const data = await r.json();
-    return !!data.running;
+    return data.status === 'ready' && !!data.loaded;
   } catch { return false; }
 }
 
-async function fetchModels() {
+async function fetchModels(forcedHealthy = null) {
+  let healthy = forcedHealthy;
   try {
-    const healthy = await checkOllamaHealth();
-    if (!healthy) throw new Error('ollama offline');
     const r = await fetch(`${API_BASE}/api/models`, { headers: { 'accept': 'application/json' } });
     if (!r.ok) throw new Error('no models');
     const data = await r.json();
     const models = data.models || [];
+    if (healthy === null) healthy = await checkModelHealth();
     if (models.length) {
-      setStatus(true, 'OLLAMA ONLINE');
+      setStatus(healthy, healthy ? 'MODEL READY' : 'MODEL OFFLINE');
       renderModelMenu(models);
       if (!selectedModel) selectedModel = models[0];
       modelNameEl.textContent = selectedModel;
       hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
       hint.style.display = '';
       hint.removeAttribute('hidden');
-      setModelPillDisabled(false);
-      return;
+      setModelPillDisabled(!healthy);
+      if (!healthy) modelNameEl.textContent = selectedModel + ' (loading)';
+      return healthy;
     }
-    setStatus(true, 'no models — pull with ollama');
+    setStatus(healthy, healthy ? 'no models — add GGUF to ' + (data.path || '~/.yourstrulyai/models') : 'MODEL OFFLINE');
     hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
     hint.style.display = '';
     hint.removeAttribute('hidden');
     setModelPillDisabled(true);
+    return healthy;
   } catch (e) {
-    setStatus(false, 'OLLAMA OFFLINE');
+    setStatus(false, 'MODEL OFFLINE');
     hint.textContent = '';
     hint.style.display = 'none';
     hint.setAttribute('hidden', '');
     setModelPillDisabled(true);
     modelNameEl.textContent = 'offline';
-    modelMenu.innerHTML = `<div class="mono" style="padding:8px 10px; color:var(--muted-foreground)">Ollama offline</div>`;
+    modelMenu.innerHTML = `<div class="mono" style="padding:8px 10px; color:var(--muted-foreground)">Model offline — check ~/.yourstrulyai/models</div>`;
+    return false;
   }
 }
 
@@ -306,7 +309,7 @@ async function send() {
         await loadConversations();
         renderHistory();
       }
-      throw new Error(t || `HTTP ${resp.status}`);
+      throw new Error(`HTTP ${resp.status}: ${t}`);
     }
     const ttftHeader = resp.headers.get('X-TTFT');
     if (ttftHeader) ttftEl.textContent = `TTFT ${Number(ttftHeader).toFixed(0)} ms`;
@@ -354,7 +357,10 @@ async function send() {
     updateAssistantCard(card, acc || 'No response.', true);
     await loadConversations();
   } catch (e) {
-    updateAssistantCard(card, `**Could not reach backend.** Is Ollama running?`, true);
+    const m = e && e.message || '';
+    const isBusy = m.includes('429') || m.includes('System Busy');
+    const msg = isBusy ? '**System Busy — model is generating.** Please wait and try again.' : '**Could not reach backend / model not loaded.** Check ~/.yourstrulyai/models and backend logs.';
+    updateAssistantCard(card, msg, true);
   } finally {
     isStreaming = false;
     sendBtn.disabled = false;
@@ -405,10 +411,10 @@ let lastHealthy = null;
 
 async function pollHealth() {
   if (document.hidden) return;
-  const healthy = await checkOllamaHealth();
+  const healthy = await checkModelHealth();
   if (healthy === lastHealthy) return;
   lastHealthy = healthy;
-  await fetchModels();
+  await fetchModels(healthy);
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -416,12 +422,12 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', pollHealth);
 
-// Init
+// Init — single health check via fetchModels (no duplicate)
 (async () => {
   await loadConversations();
   renderHistory();
-  await fetchModels();
-  try { lastHealthy = await checkOllamaHealth(); } catch {}
+  const h = await fetchModels();
+  lastHealthy = h;
   autoResize();
   if (!currentConversationId) showEmpty(true);
   setInterval(pollHealth, 10000);

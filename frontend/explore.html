@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Explore Models — YoursTruly AI</title>
+  <meta name="color-scheme" content="light" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231B1F24'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='13' fill='%23F2F0E8'>YT</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./theme.css">
+  <link rel="stylesheet" href="./explore.css">
+</head>
+<body class="explore">
+  <nav class="explore-topnav" aria-label="Primary">
+    <a class="brand" href="./index.html">
+      <span class="brand-mark">YT</span>
+      YoursTruly AI
+      <span class="brand-sub">Lab</span>
+    </a>
+    <div class="topnav-links" role="tablist">
+      <a href="./index.html">Chat</a>
+      <a href="./explore.html" aria-current="page">Explore</a>
+      <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">API</a>
+    </div>
+    <div class="topnav-status">
+      <span class="hw-dot" id="hwDot" aria-hidden="true"></span>
+      <span class="mono" id="hwStatus">probing hardware…</span>
+    </div>
+  </nav>
+
+  <!-- Tab bar — Explore is center (2) -->
+  <div class="tab-bar-wrap">
+    <div class="tab-bar" role="tablist" aria-label="Explore sections">
+      <button role="tab" id="tab-hardware" class="tab-btn" data-tab="hardware" aria-selected="false" aria-controls="panel-hardware">Hardware</button>
+      <button role="tab" id="tab-explore" class="tab-btn active" data-tab="explore" aria-selected="true" aria-controls="panel-explore">Explore</button>
+      <button role="tab" id="tab-installed" class="tab-btn" data-tab="installed" aria-selected="false" aria-controls="panel-installed">Installed Models</button>
+    </div>
+  </div>
+
+  <!-- Panels -->
+  <div class="panels">
+
+    <!-- Hardware panel — top to bottom, RAM first -->
+    <section id="panel-hardware" class="panel" role="tabpanel" aria-labelledby="tab-hardware" hidden>
+      <div class="panel-inner hardware-panel">
+        <header class="panel-head">
+          <h2>Hardware inspect</h2>
+        </header>
+        <div class="loading-state mono" id="hardwareLoading"><div class="spinner small"></div><span>Fetching hardware specs…</span></div>
+        <div class="hw-stack" id="hwStack" hidden>
+          <div class="hw-card total-ram-card">
+            <div class="hw-kpi">
+              <span class="kpi-label mono">Total RAM</span>
+              <span class="kpi-value" id="kpiTotalRam">—</span>
+              <div class="kpi-bar"><span id="totalRamFill"></span></div>
+              <span class="kpi-meta mono" id="kpiTotalRamMeta">installed</span>
+            </div>
+          </div>
+          <div class="hw-card ram-card">
+            <div class="hw-kpi">
+              <span class="kpi-label mono">Available RAM</span>
+              <span class="kpi-value" id="kpiRam">—</span>
+              <div class="kpi-bar"><span id="ramFill"></span></div>
+              <span class="kpi-meta mono" id="kpiRamMeta"></span>
+            </div>
+          </div>
+          <div class="hw-card vram-card">
+            <div class="hw-kpi">
+              <span class="kpi-label mono">GPU VRAM</span>
+              <span class="kpi-value" id="kpiVram">—</span>
+              <div class="kpi-bar"><span id="vramFill"></span></div>
+              <span class="kpi-meta mono" id="kpiVramMeta"></span>
+            </div>
+          </div>
+          <div class="hw-card details">
+            <div class="detail-grid" id="hwDetails">
+              <div class="detail"><span class="mono">CPU</span><strong id="kpiCpuName">—</strong></div>
+              <div class="detail"><span class="mono">Cores</span><strong id="kpiCores">—</strong></div>
+              <div class="detail"><span class="mono">GPU</span><strong id="kpiGpu">—</strong></div>
+            </div>
+            <div id="hwExtra" class="hw-extra mono"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Explore panel — marketplace (default) -->
+    <section id="panel-explore" class="panel" role="tabpanel" aria-labelledby="tab-explore">
+      <div class="panel-inner catalog-panel">
+        <header class="catalog-hero">
+          <div class="hero-copy">
+            <h1>Models for this device</h1>
+            <p>Filtered for your hardware. <span class="badge perfect inline" title="Best estimate for this device — fits without extra paging, but actual speed varies by load">Perfect</span> is the best estimate for this device.</p>
+          </div>
+          <div class="hero-meta mono">
+            <span id="catalogCount">—</span>
+          </div>
+        </header>
+
+        <div class="filter-bar" role="toolbar" aria-label="Catalog filters">
+          <div class="filter-row top">
+            <label class="filter-search"><input id="search" type="search" placeholder="Search qwen, llama, mistral…" autocomplete="off" /></label>
+            <label class="check mono"><input type="checkbox" id="perfectOnly" checked /> Perfect only</label>
+            <label class="check mono"><input type="checkbox" id="includeCommunity" /> Community</label>
+          </div>
+          <div class="filter-row bottom">
+            <label class="filter-select mono" title="Best fit = highest score, Fastest = highest tok/s, Smallest = lowest VRAM">Sort <select id="sort"><option value="score" selected title="Highest overall score (fit+quality+speed)">Best fit</option><option value="tps" title="Highest estimated tokens/sec">Fastest</option><option value="mem" title="Lowest VRAM/disk — usually smaller models, often faster">Smallest</option></select></label>
+            <div class="filter-select mono providers-wrap" id="providersWrap">
+              <span>Providers</span>
+              <button type="button" id="providerBtn" class="provider-btn mono" aria-haspopup="true" aria-expanded="false" title="All providers"><span id="providerBtnLabel">All</span><span class="chev" aria-hidden="true">▾</span></button>
+              <div id="providerMenu" class="provider-menu" hidden role="group" aria-label="Providers"></div>
+            </div>
+            <div class="filter-actions">
+              <button id="applyFilters" class="primary mono" type="button">Apply</button>
+              <button id="resetFilters" class="ghost small mono" type="button">Reset</button>
+            </div>
+            <select id="limit" hidden><option selected>100</option></select>
+          </div>
+        </div>
+
+        <div class="catalog-meta mono">
+          <span id="catalogPath" class="muted"></span>
+          <span id="catalogStatus" class="status"></span>
+        </div>
+
+        <div id="catalogGrid" class="catalog-grid" aria-live="polite">
+          <div class="loading-state mono" id="catalogLoading"><div class="spinner"></div><span>Loading models…</span></div>
+        </div>
+        <div id="loadMoreWrap" class="load-more-wrap" hidden style="flex-direction:column;"><button id="loadMore" class="ghost small mono" type="button">Load more</button><span id="loadMoreInfo" class="mono muted" style="font-size:11px;"></span></div>
+        <div id="emptyCatalog" class="empty-catalog mono" hidden>
+          No models match. Try clearing Perfect only or widen providers.
+        </div>
+      </div>
+    </section>
+
+    <!-- Installed panel — CRUD -->
+    <section id="panel-installed" class="panel" role="tabpanel" aria-labelledby="tab-installed" hidden>
+      <div class="panel-inner installed-panel">
+        <header class="panel-head">
+          <h2>Installed Models</h2>
+          <div class="installed-hero-card">
+            <div class="installed-hero-main">
+              <span class="mono" style="font-size:11px; color:var(--lab-zinc);">Downloaded models are saved in</span>
+              <code id="cachePath" class="cache-path-code" title="~/.yourstrulyai/models">~/.yourstrulyai/models</code>
+              <button id="copyPath" class="ghost small mono" type="button" title="Copy path">Copy</button>
+            </div>
+            <div class="installed-hero-meta mono">
+              <span id="cacheCount">0 models</span>
+              <span id="cacheTotalSize" class="muted"></span>
+            </div>
+          </div>
+        </header>
+        <div id="localList" class="local-list"><div class="loading-state mono" id="installedLoading"><div class="spinner small"></div><span>Checking installed models…</span></div></div>
+        <div class="installed-actions">
+          <button id="refreshLocal" class="ghost small mono" type="button">Refresh</button>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Toast stack: info / success / warning / error -->
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Bottom-right download dock -->
+  <div id="downloadDock" class="download-dock" hidden>
+    <div class="dock-head">
+      <span class="mono dock-title">Downloads</span>
+      <button id="dockClose" class="dock-min" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="dockList" class="dock-list"></div>
+  </div>
+  <button id="dockFab" class="dock-fab mono pulse" type="button" hidden aria-label="Show downloads">
+    <span class="fab-icon">↓</span>
+  </button>
+
+  <dialog id="deleteModal" class="delete-modal">
+    <form method="dialog" class="delete-modal-box">
+      <h3>Delete model?</h3>
+      <p class="mono" id="deleteModalName">—</p>
+      <p style="font-size:13.5px; color:#5A5D63;">This will permanently remove the file from disk.</p>
+      <div class="delete-modal-actions">
+        <button type="button" id="deleteCancel" class="ghost small mono">Cancel</button>
+        <button type="submit" id="deleteConfirm" class="primary mono" value="confirm" style="background:var(--lab-ember); border-color:var(--lab-ember);">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="./explore.js" type="module"></script>
+</body>
+</html>
