@@ -1,18 +1,15 @@
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import NullPool
 
 from config import config
 
-# SQLite-only engine for local desktop app
+# SQLite-only engine for local desktop app (NullPool — single-user, no idle handles)
 engine = create_engine(
     config.DATABASE_URL,
     echo=False,
     connect_args={"check_same_thread": False},
-    poolclass=QueuePool,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True
+    poolclass=NullPool,
 )
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)

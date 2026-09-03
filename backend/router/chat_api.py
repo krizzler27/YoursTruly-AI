@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
@@ -7,7 +7,7 @@ import json
 import uuid
 
 from db.db_engine import get_db
-from services.llm_services import LLMServices
+from services.llama_service import LlamaEngine
 from services.chat_services import ChatServices
 from schemas.api_schemas import ChatRequest, ConversationResponse, MessageResponse
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api", tags=["Chat"])
 
 
 @router.post('/chat/stream')
-async def chat(request: ChatRequest, db: Session = Depends(get_db)):
+async def chat(request: ChatRequest, http_request: Request, db: Session = Depends(get_db)):
 
     try:
         chat_service = ChatServices(db)
@@ -29,11 +29,21 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         history_prev = chat_service.get_history(conversation.id, limit=5)
         chat_service.add_message(conversation.id, "user", request.query)
 
-        llm = LLMServices(model=request.model) if request.model else LLMServices()
-        messages = LLMServices.build_chat_messages(history_prev, request.query)
+        # single-slot guard — 429 System Busy before spawning worker
+        engine = LlamaEngine.get_instance()
+        if engine.is_generating():
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "System Busy — model is generating. Try again."},
+                headers={"X-Conversation-Id": str(conversation.id)},
+            )
+        # build messages via prompt manager (system <150 tokens)
+        messages = LlamaEngine.build_chat_messages(history_prev, request.query)
 
         start_time = time.perf_counter()
-        stream = llm.astream(messages=messages)
+        # optional model override — if request.model given, map to file in models dir
+        # for now ignore override and use singleton model_path; future: resolve gguf by name
+        stream = engine.astream_chat(messages=messages, request=http_request)
 
         # 1. Await the first delta before returning StreamingResponse to calculate TTFT
         try:
@@ -44,9 +54,16 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             first_delta = None
             ttft_ms = 0.0
         except Exception as e:
+            msg = str(e)
+            if "System Busy" in msg:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": msg},
+                    headers={"X-Conversation-Id": str(conversation.id)},
+                )
             return JSONResponse(
                 status_code=500,
-                content={"Exception occured": str(e), "type": type(e).__name__},
+                content={"Exception occured": msg, "type": type(e).__name__},
                 headers={"X-Conversation-Id": str(conversation.id)},
             )
 

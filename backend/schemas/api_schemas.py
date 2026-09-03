@@ -41,3 +41,38 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ModelDownloadRequest(BaseModel):
+    repo_id: str
+    filename: Optional[str] = None
+    quant: Optional[str] = None
+
+    @field_validator("repo_id")
+    @classmethod
+    def check_repo(cls, v):
+        if not v or not v.strip():
+            raise ValueError("repo_id cannot be empty")
+        v = v.strip()
+        # allow HF repo, search query, or known name
+        return v
+
+    @field_validator("filename")
+    @classmethod
+    def check_filename(cls, v):
+        if v is None or v == "":
+            return v
+        v = v.strip()
+        if "/" in v or "\\" in v or ".." in v:
+            raise ValueError("Invalid filename")
+        if not v.lower().endswith(".gguf"):
+            raise ValueError("filename must be .gguf")
+        return v
+
+    @field_validator("quant")
+    @classmethod
+    def check_quant(cls, v):
+        if v is None or v == "":
+            return v
+        v = v.strip().upper()
+        return v
