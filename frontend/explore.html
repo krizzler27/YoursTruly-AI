@@ -113,7 +113,20 @@
     </main>
   </div>
 
-  <div id="toast" class="toast mono" role="status" aria-live="polite" hidden></div>
+  <!-- Toast stack: info / success / warning / error -->
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Bottom-right download dock -->
+  <div id="downloadDock" class="download-dock" hidden>
+    <div class="dock-head">
+      <span class="mono dock-title">Downloads</span>
+      <button id="dockClose" class="dock-min" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="dockList" class="dock-list"></div>
+  </div>
+  <button id="dockFab" class="dock-fab mono pulse" type="button" hidden aria-label="Show downloads">
+    <span class="fab-icon">↓</span>
+  </button>
 
   <script src="./explore.js" type="module"></script>
 </body>

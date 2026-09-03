@@ -1,9 +1,11 @@
 from typing import Any, Dict, List, Optional, Set
+from pathlib import Path
 import subprocess
+import logging
 import shutil
 import json
-import logging
-from pathlib import Path
+
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ class LLMFitServices:
     ):
         """Init with allowed providers; defaults to TRUSTED_PROVIDERS."""
         self.trusted_providers = {p.lower() for p in (trusted_providers or TRUSTED_PROVIDERS)}
+        self.models_dir = Path(config.LLAMA_MODEL_PATH)
 
     def _ensure_runner(self) -> List[str]:
         """Return CLI prefix: `llmfit` if installed else `uvx llmfit`; raises if missing."""
@@ -47,6 +50,40 @@ class LLMFitServices:
         data = json.loads(res.stdout)
         return {"system": data.get("system", data), "raw": data}
 
+    def _run_ranked(
+        self,
+        verb: str,
+        limit: int,
+        sort: str,
+        providers: Optional[List[str]],
+        perfect_only: bool,
+        include_community: bool,
+        extra_flags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Shared runner for `fit`/`recommend` — single place for sort/provider/cli shape."""
+        from schemas.api_schemas import SORT_ALIASES
+
+        sort = SORT_ALIASES.get(sort.strip().lower(), sort.strip().lower()) if sort else "score"
+        if providers is not None and len(providers) == 0:
+            providers = None
+        runner = self._ensure_runner()
+        cmd = runner + [verb, "--json", "--limit", str(limit), "--sort", sort]
+        if perfect_only:
+            cmd += ["--perfect"]
+        if extra_flags:
+            cmd += extra_flags
+        if providers is not None:
+            if providers:
+                cmd += ["--providers", ",".join(providers)]
+        elif not include_community:
+            cmd += ["--providers", ",".join(sorted(self.trusted_providers))]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW, timeout=30)
+        raw = json.loads(res.stdout)
+        models = raw.get("models", raw) if isinstance(raw, dict) else raw
+        system = raw.get("system") if isinstance(raw, dict) else None
+        catalog, flat = self._classify(models)
+        return {"system": system, "raw": raw, "models": models, "catalog": catalog, "flat": flat, "cmd": cmd}
+
     def discover_and_classify(
         self,
         limit: int = 20,
@@ -56,31 +93,12 @@ class LLMFitServices:
         sort: str = "score",
     ) -> Dict[str, Any]:
         """Run `llmfit fit --json` with filters, return `{system, meta, catalog, models}` ranked for this hardware."""
-        from schemas.api_schemas import SORT_ALIASES
-
-        sort = SORT_ALIASES.get(sort.strip().lower(), sort.strip().lower()) if sort else "score"
-        if providers is not None and len(providers) == 0:
-            providers = None  # [] -> trusted
-        runner = self._ensure_runner()
-        cmd = runner + ["fit", "--json", "--limit", str(limit), "--sort", sort]
-        if perfect_only:
-            cmd += ["--perfect"]
-        if providers is not None:
-            if providers:
-                cmd += ["--providers", ",".join(providers)]
-        elif not include_community:
-            cmd += ["--providers", ",".join(sorted(self.trusted_providers))]
-
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW, timeout=30)
-        raw = json.loads(res.stdout)
-        models = raw.get("models", raw) if isinstance(raw, dict) else raw
-        system = raw.get("system") if isinstance(raw, dict) else None
-        catalog, flat = self._classify(models)
+        r = self._run_ranked("fit", limit, sort, providers, perfect_only, include_community)
         return {
-            "system": system,
-            "meta": {"cmd": " ".join(cmd), "limit": limit, "include_community": include_community, "perfect_only": perfect_only, "total": len(models)},
-            "catalog": catalog,
-            "models": flat,
+            "system": r["system"],
+            "meta": {"cmd": " ".join(r["cmd"]), "limit": limit, "include_community": include_community, "perfect_only": perfect_only, "total": len(r["models"])},
+            "catalog": r["catalog"],
+            "models": r["flat"],
         }
 
     def recommend(
@@ -94,34 +112,48 @@ class LLMFitServices:
         include_community: bool = False,
         perfect_only: bool = False,
     ) -> Dict[str, Any]:
-        """Run `llmfit recommend --json` filtered by use_case (general/coding/...), same ranking as fit."""
-        from schemas.api_schemas import SORT_ALIASES
-
-        sort = SORT_ALIASES.get(sort.strip().lower(), sort.strip().lower()) if sort else "score"
-        if providers is not None and len(providers) == 0:
-            providers = None
+        """Run `llmfit recommend --json` filtered by use_case; providers/sort/perfect filtered client-side."""
         runner = self._ensure_runner()
-        cmd = runner + ["recommend", "--json", "--limit", str(limit), "--sort", sort]
+        cmd = runner + ["recommend", "--json", "--limit", str(limit)]
         if use_case:
             cmd += ["--use-case", use_case]
         if min_fit:
             cmd += ["--min-fit", min_fit]
         if runtime and runtime != "any":
             cmd += ["--runtime", runtime]
-        if perfect_only:
-            cmd += ["--perfect"]
-        # recommend respects same provider filtering as fit
-        if providers is not None:
-            if providers:
-                cmd += ["--providers", ",".join(providers)]
-        elif not include_community:
-            cmd += ["--providers", ",".join(sorted(self.trusted_providers))]
-
         res = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=CREATE_NO_WINDOW, timeout=30)
         raw = json.loads(res.stdout)
         models = raw.get("models", raw) if isinstance(raw, dict) else raw
         system = raw.get("system") if isinstance(raw, dict) else None
         catalog, flat = self._classify(models)
+        # client-side provider filtering (recommend CLI has no --providers)
+        if providers is not None and len(providers) > 0:
+            wanted = {p.lower() for p in providers}
+            flat = [m for m in flat if (m.get("provider") or "").lower() in wanted]
+            for k in catalog:
+                catalog[k] = [m for m in catalog[k] if (m.get("provider") or "").lower() in wanted]
+        elif not include_community and providers is None:
+            # trusted-only default for recommend too
+            wanted = self.trusted_providers
+            flat = [m for m in flat if (m.get("provider") or "").lower() in wanted]
+            for k in catalog:
+                catalog[k] = [m for m in catalog[k] if (m.get("provider") or "").lower() in wanted]
+        if perfect_only:
+            flat = [m for m in flat if (m.get("fit_level") or "").lower() == "perfect"]
+            catalog = {"perfect": catalog["perfect"], "runnable": [], "others": []}
+        # sort client-side (recommend has no --sort)
+        from schemas.api_schemas import SORT_ALIASES
+
+        sort = SORT_ALIASES.get(sort.strip().lower(), sort.strip().lower()) if sort else "score"
+        if sort == "tps":
+            flat.sort(key=lambda m: m.get("tps") or 0, reverse=True)
+            for k in catalog:
+                catalog[k].sort(key=lambda m: m.get("tps") or 0, reverse=True)
+        elif sort == "mem":
+            flat.sort(key=lambda m: m.get("vram_gb") or 0)
+            for k in catalog:
+                catalog[k].sort(key=lambda m: m.get("vram_gb") or 0)
+        # score is default order from llmfit (already sorted)
         return {
             "system": system,
             "meta": {"cmd": " ".join(cmd), "limit": limit, "use_case": use_case, "min_fit": min_fit, "total": len(models)},
@@ -166,78 +198,11 @@ class LLMFitServices:
 
     def list_local(self) -> List[str]:
         """Scan `~/.yourstrulyai/models` for `*.gguf`; returns sorted filenames for UI picker."""
-        from config import config
-        d = Path(config.LLAMA_MODEL_PATH)
         try:
-            return sorted([p.name for p in d.glob("*.gguf") if p.is_file()])
+            return sorted([p.name for p in self.models_dir.glob("*.gguf") if p.is_file()])
         except Exception as e:
-            logger.warning("list_local failed %s: %s", d, e)
+            logger.warning("list_local failed %s: %s", self.models_dir, e)
             return []
-
-    def download(self, repo_id: str, filename: str = "", quant: Optional[str] = None) -> Dict[str, Any]:
-        """Download GGUF via `llmfit download <repo> [--quant] --output-dir <models>`; dedups, renames, returns `{status, path}`."""
-        if not repo_id or not repo_id.strip():
-            raise ValueError("repo_id cannot be empty")
-        repo_id = repo_id.strip()
-        filename = (filename or "").strip()
-        if filename and ("/" in filename or "\\" in filename or ".." in filename):
-            raise ValueError("Invalid filename")
-        if filename and not filename.lower().endswith(".gguf"):
-            raise ValueError("filename must be .gguf")
-
-        # derive quant from filename if not explicit
-        if not quant and filename:
-            # e.g. Llama-3.2-3B-Q4_K_M.gguf → Q4_K_M
-            import re
-            m = re.search(r"(Q\d[_\w]*|IQ\d_\w+|BF16|F16|F32)", filename, re.IGNORECASE)
-            if m:
-                quant = m.group(1).upper()
-
-        from config import config
-        d = Path(config.LLAMA_MODEL_PATH)
-        # if filename provided and already exists, skip
-        if filename:
-            dest = d / filename
-            if dest.exists() and dest.stat().st_size > 1024 * 1024:
-                return {"status": "exists", "path": str(dest), "repo_id": repo_id, "filename": filename, "quant": quant}
-
-        runner = self._ensure_runner()
-        cmd = runner + ["download", repo_id]
-        if quant:
-            cmd += ["--quant", quant]
-        cmd += ["--output-dir", str(d)]
-        try:
-            res = subprocess.run(
-                cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW, timeout=600
-            )
-            if res.returncode != 0:
-                raise RuntimeError(res.stderr or res.stdout or f"llmfit download failed for {repo_id}")
-            import re
-            m = re.search(r"Model saved to:\s*([^\s]+)", res.stdout)
-            saved_path: Optional[Path] = Path(m.group(1).strip()) if m else None
-            # llmfit with --output-dir writes directly to d; fallback scan d for newest .gguf
-            if not saved_path or not saved_path.exists():
-                candidates = sorted(d.glob("*.gguf"), key=lambda p: p.stat().st_mtime, reverse=True)
-                saved_path = candidates[0] if candidates else None
-            if not saved_path or not saved_path.exists():
-                return {"status": "ok", "path": str(d), "repo_id": repo_id, "filename": filename or "", "quant": quant, "output": res.stdout[-1500:]}
-            # honor explicit filename — rename if llmfit chose different name
-            if filename and saved_path.name != filename:
-                dest = d / filename
-                try:
-                    if dest.exists():
-                        dest.unlink()
-                    saved_path.rename(dest)
-                    saved_path = dest
-                except Exception as e:
-                    raise RuntimeError(f"Rename to {filename} failed: {e}") from e
-            return {"status": "ok", "path": str(saved_path), "repo_id": repo_id, "filename": saved_path.name, "quant": quant, "output": res.stdout[-1500:]}
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"Download timeout for {repo_id}: {e}") from e
-        except Exception as e:
-            if isinstance(e, RuntimeError):
-                raise
-            raise RuntimeError(f"Download failed: {e}") from e
 
     def list_remote_ggufs(self, model: str) -> Dict[str, Any]:
         """Run `llmfit download <model> --list` and return `{model, output, options}` of available quants."""
@@ -257,9 +222,7 @@ class LLMFitServices:
         filename = filename.strip()
         if "/" in filename or "\\" in filename or ".." in filename:
             raise ValueError("Invalid filename")
-        from config import config
-        d = Path(config.LLAMA_MODEL_PATH)
-        p = d / filename
+        p = self.models_dir / filename
         if not p.exists():
             raise FileNotFoundError(f"Model not found: {filename}")
         p.unlink()

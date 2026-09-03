@@ -29,17 +29,45 @@ const limitEl = $('#limit');
 const sortEl = $('#sort');
 const perfectOnlyEl = $('#perfectOnly');
 const includeCommunityEl = $('#includeCommunity');
-const toastEl = $('#toast');
+const toastStack = $('#toastStack');
+const downloadDock = $('#downloadDock');
+const dockList = $('#dockList');
+const dockFab = $('#dockFab');
+const dockClose = $('#dockClose');
 
 const PROVIDERS = ['meta','alibaba','google','mistral','microsoft','deepseek'];
 let selectedProviders = new Set(PROVIDERS);
 let lastData = null;
 
-function toast(msg){
-  toastEl.textContent = msg;
-  toastEl.hidden = false;
-  clearTimeout(toastEl._t);
-  toastEl._t = setTimeout(()=> toastEl.hidden = true, 2600);
+// --- Toast: info / success / warning / error ---
+function toast(msg, type='info', ttl){
+  if(!toastStack) return;
+  const el = document.createElement('div');
+  el.className = `toast-item ${type}`;
+  const iconMap = {info:'i', success:'✓', warning:'!', error:'×'};
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.textContent = iconMap[type] || 'i';
+  const text = document.createElement('span');
+  text.textContent = msg;
+  text.style.flex='1';
+  text.style.minWidth='0';
+  const close = document.createElement('button');
+  close.className='toast-close';
+  close.type='button';
+  close.textContent='×';
+  close.addEventListener('click', ()=> dismiss());
+  el.append(icon, text, close);
+  toastStack.appendChild(el);
+  const duration = ttl ?? (type==='error' ? 6000 : type==='warning' ? 5000 : 4000);
+  let t = setTimeout(dismiss, duration);
+  function dismiss(){
+    clearTimeout(t);
+    el.style.animation='toastOut 140ms ease forwards';
+    setTimeout(()=> el.remove(), 150);
+  }
+  el.addEventListener('mouseenter', ()=> clearTimeout(t));
+  el.addEventListener('mouseleave', ()=> t=setTimeout(dismiss, 1200));
 }
 function esc(s){ return s.replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
@@ -86,6 +114,161 @@ function toggleProviderMenu(force){
   providersWrap.classList.toggle('open', willOpen);
 }
 
+// --- Download dock: single non-blocking + polling (3s active, 0 grace) ---
+let dockJobs = new Map(); // job_id -> job
+let dockPollTimer = null;
+let dockGraceTimer = null;
+let dockMinimized = false;
+
+function stopDockPolling(){
+  if(dockPollTimer){ clearInterval(dockPollTimer); dockPollTimer=null; }
+}
+function clearGrace(){
+  if(dockGraceTimer){ clearTimeout(dockGraceTimer); dockGraceTimer=null; }
+}
+
+function ensureDockPolling(){
+  clearGrace();
+  if(dockPollTimer) return;
+  dockPollTimer = setInterval(async ()=>{
+    try{
+      const r = await fetch(`${API_BASE}/api/downloads`);
+      if(!r.ok) return;
+      const data = await r.json();
+      const jobs = data.jobs || [];
+      jobs.forEach(j=>{
+        const prev = dockJobs.get(j.id);
+        dockJobs.set(j.id, j);
+        if(prev && prev.status!==j.status){
+          if(j.status==='completed') { toast(`Download complete: ${j.filename || j.repo_id}`, 'success'); fetchLocal(); }
+          if(j.status==='failed') toast(`Download failed: ${j.repo_id} — ${j.error ? j.error.slice(0,120) : 'see logs'}`, 'error');
+        }
+      });
+      renderDock();
+      const stillActive = jobs.some(j=> j.status==='queued' || j.status==='downloading');
+      if(!stillActive){
+        // static 30s grace: stop polling, keep dock visible from cached dockJobs, then auto-clear
+        stopDockPolling();
+        clearGrace();
+        dockGraceTimer = setTimeout(()=>{
+          dockJobs.clear();
+          renderDock();
+          dockGraceTimer=null;
+        }, 30000);
+      }
+    }catch{}
+  }, 3000);
+}
+
+function renderDock(){
+  const jobs = [...dockJobs.values()].sort((a,b)=> new Date(b.created_at)-new Date(a.created_at));
+  const activeCount = jobs.filter(j=> j.status==='queued'||j.status==='downloading').length;
+  const total = jobs.length;
+  const hasActive = activeCount>0;
+  downloadDock.classList.toggle('pulse', hasActive);
+  dockFab.classList.toggle('pulse', hasActive);
+  if(total===0){
+    downloadDock.hidden = true;
+    dockFab.hidden = true;
+    dockList.innerHTML = '<div class="dock-empty mono">No downloads yet.</div>';
+    return;
+  }
+  if(dockMinimized){
+    downloadDock.hidden = true;
+    dockFab.hidden = false;
+    return;
+  }
+  downloadDock.hidden = false;
+  dockFab.hidden = true;
+  if(!jobs.length){
+    dockList.innerHTML = '<div class="dock-empty mono">No downloads yet.</div>';
+    return;
+  }
+  dockList.innerHTML = jobs.map(j=>{
+    const pct = Math.max(0, Math.min(100, Number(j.progress)||0));
+    const status = j.status || 'queued';
+    const name = esc(j.repo_id || j.id);
+    const quant = esc(j.quant || '');
+    const barClass = status==='completed' ? 'completed' : status==='failed' ? 'failed' : 'downloading';
+    const canCancel = status==='queued' || status==='downloading';
+    const err = j.error ? ` title="${esc(j.error.slice(0,200))}"` : '';
+    return `<div class="dock-item" data-id="${esc(j.id)}">
+      <div class="dock-item-head">
+        <span class="dock-item-name" title="${name}">${name}</span>
+        <span class="dock-item-quant">${quant}</span>
+        <span class="dock-item-status ${status}"${err}>${status}</span>
+      </div>
+      <div class="dock-bar"><i class="${barClass}" style="width:${status==='failed'?100:pct}%"></i></div>
+      <div class="dock-item-foot">
+        <span class="dock-meta mono">${j.filename ? esc(j.filename) : ''}</span>
+        <span class="dock-actions">
+          ${canCancel ? `<button type="button" data-cancel="${esc(j.id)}" class="danger">Cancel</button>` : ''}
+          ${status==='completed' && j.path ? `<span class="mono" style="font-size:10px;color:var(--lab-moss)">✓ saved</span>` : ''}
+        </span>
+      </div>
+    </div>`;
+  }).join('');
+  // bind cancel
+  dockList.querySelectorAll('[data-cancel]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.getAttribute('data-cancel');
+      if(!id) return;
+      btn.disabled=true; btn.textContent='…';
+      try{
+        const r = await fetch(`${API_BASE}/api/downloads/${id}`, {method:'DELETE'});
+        const d = await r.json().catch(()=>({}));
+        if(!r.ok) toast(d.detail||'Cancel failed','error');
+        else toast('Cancelled download','warning');
+        // refresh immediately
+        const r2 = await fetch(`${API_BASE}/api/downloads`);
+        if(r2.ok){ const dd=await r2.json(); dd.jobs.forEach(j=>dockJobs.set(j.id,j)); renderDock(); }
+      }catch(e){ toast(e.message||'Cancel failed','error'); }
+      finally{ btn.disabled=false; }
+    });
+  });
+  // also update per-card buttons if catalog visible
+  updateCardButtons(jobs);
+}
+
+function updateCardButtons(jobs){
+  const byRepo = new Map();
+  jobs.forEach(j=>{ if(j.status==='queued'||j.status==='downloading') byRepo.set(j.repo_id, j); });
+  document.querySelectorAll('.download').forEach(btn=>{
+    const repo = btn.dataset.repo;
+    const job = repo ? byRepo.get(repo) : null;
+    if(job){
+      btn.disabled = true;
+      btn.textContent = job.status==='queued' ? 'Queued…' : `Downloading ${job.progress||0}%`;
+    } else {
+      // only re-enable if not handled by current active job; leave completed as Download
+      if(btn.dataset._busy) {
+        btn.disabled=false;
+        btn.textContent='Download';
+        delete btn.dataset._busy;
+      }
+    }
+  });
+}
+
+function showDock(){
+  dockMinimized=false;
+  renderDock();
+}
+function hideDockToFab(){
+  dockMinimized=true;
+  downloadDock.hidden=true;
+  dockFab.hidden = dockJobs.size===0;
+}
+
+// dock controls — only X closes to fab
+if(dockClose) dockClose.addEventListener('click', ()=>{
+  clearGrace(); stopDockPolling();
+  dockMinimized=true;
+  downloadDock.hidden=true;
+  dockFab.hidden = dockJobs.size===0;
+});
+if(dockFab) dockFab.addEventListener('click', showDock);
+
 async function fetchSystem(){
   try{
     const r=await fetch(`${API_BASE}/api/system`);
@@ -124,32 +307,69 @@ async function fetchSystem(){
   }
 }
 
+let installedSet = new Set(); // lowercased gguf filenames for isInstalled check
+function isRepoInstalled(repo, quant){
+  if(!repo || !installedSet.size) return false;
+  const rb = repo.split('/').pop().toLowerCase().replace(/-gguf$/,'').replace(/\.gguf$/,'');
+  const core = rb.split('-').slice(0,2).join('-');
+  const qn = (quant||'').toLowerCase().replace(/_/g,'-');
+  for(const f of installedSet){
+    if(core && !f.includes(core)) continue;
+    if(qn){
+      const fn = f.replace(/[-_]/g,'');
+      const qf = qn.replace(/[-_]/g,'');
+      if(!fn.includes(qf)) continue;
+    }
+    return true;
+  }
+  return false;
+}
+function refreshInstalledButtons(){
+  document.querySelectorAll('.download').forEach(btn=>{
+    if(btn.dataset.installed==='1') return; // already marked
+    const repo=btn.dataset.repo, quant=btn.dataset.quant;
+    if(isRepoInstalled(repo, quant)){
+      btn.textContent='✓ Installed';
+      btn.disabled=true;
+      btn.dataset.installed='1';
+      btn.title='Already installed';
+      btn.style.background='var(--lab-moss)';
+      btn.style.borderColor='var(--lab-moss)';
+      btn.style.opacity='1';
+    }
+  });
+}
 async function fetchLocal(){
   try{
     const r=await fetch(`${API_BASE}/api/models`);
     const j=await r.json();
     const models=j.models||[];
+    installedSet = new Set(models.map(m=>m.toLowerCase()));
     cachePath.textContent=j.path||'~/.yourstrulyai/models';
     cacheCount.textContent=`${models.length} installed`;
     if(!models.length){
       localList.innerHTML='<div class="empty mono">No models installed — pick a Perfect fit from the catalog below and Download.</div>';
-      return;
-    }
-    localList.innerHTML='';
-    models.forEach(name=>{
-      const div=document.createElement('div');
-      div.className='local-item';
-      div.innerHTML=`<span>${esc(name)}</span><button type="button" data-file="${esc(name)}">Delete</button>`;
-      div.querySelector('button').addEventListener('click', async ()=>{
-        if(!confirm(`Delete ${name}?`)) return;
-        const del=await fetch(`${API_BASE}/api/models/${encodeURIComponent(name)}`,{method:'DELETE'});
-        const dj=await del.json().catch(()=>({}));
-        if(!del.ok) toast(dj.detail||'Delete failed');
-        else toast('Deleted ' + name);
-        fetchLocal();
+    } else {
+      localList.innerHTML='';
+      models.forEach(name=>{
+        const div=document.createElement('div');
+        div.className='local-item';
+        div.innerHTML=`<span>${esc(name)}</span><button type="button" data-file="${esc(name)}">Delete</button>`;
+        div.querySelector('button').addEventListener('click', async ()=>{
+          if(!confirm(`Delete ${name}?`)) return;
+          const del=await fetch(`${API_BASE}/api/models/${encodeURIComponent(name)}`,{method:'DELETE'});
+          const dj=await del.json().catch(()=>({}));
+          if(!del.ok) toast(dj.detail||'Delete failed','error');
+          else { toast('Deleted ' + name,'success'); }
+          await fetchLocal();
+          // re-enable catalog buttons after delete
+          document.querySelectorAll('.download[data-installed]').forEach(b=>{ delete b.dataset.installed; b.disabled=false; b.textContent='Download'; b.title=''; b.style.background=''; b.style.borderColor=''; b.style.opacity=''; });
+          refreshInstalledButtons();
+        });
+        localList.appendChild(div);
       });
-      localList.appendChild(div);
-    });
+    }
+    refreshInstalledButtons();
   }catch{
     localList.innerHTML='<div class="empty mono">Could not load installed models.</div>';
   }
@@ -166,13 +386,18 @@ function cardTemplate(m){
   const lvl=fitClass(m.fit_level);
   const pct = lvl==='perfect' ? 92 : lvl==='runnable' ? 62 : 28;
   const sources = (m.gguf_sources||[]).map(g=>g.repo).join(', ') || '';
-  const repo = m.hf_repo || (m.gguf_sources?.[0]?.repo) || '';
+  const repo = m.hf_repo || (m.gguf_sources?.[0]?.repo) || m.name || '';
   const quant = m.quant || m.best_quant || '';
   const tps = m.tps ? `${m.tps} tok/s` : '—';
   const vram = m.vram_gb ? `${m.vram_gb} GB` : '—';
   const disk = m.disk_size_gb ? `${m.disk_size_gb} GB` : vram;
   const name = esc(m.name||'');
   const provider = esc(m.provider||'');
+  const already = isRepoInstalled(repo, quant);
+  const btnLabel = already ? '✓ Installed' : 'Download';
+  const btnDisabled = already ? ' disabled' : '';
+  const btnInstalled = already ? ' data-installed="1"' : '';
+  const btnTitle = already ? ' title="Already installed"' : '';
   return `
   <article class="card" tabindex="0" aria-label="${name}">
     <div class="card-tape" aria-hidden="true"><div class="tape-fit ${lvl}">${lvl}</div></div>
@@ -189,7 +414,7 @@ function cardTemplate(m){
       <div class="fit-bar" aria-hidden="true"><i class="${lvl}" style="width:${pct}%"></i></div>
       <div class="card-foot">
         <small title="${esc(sources)}">${repo ? esc(repo) : 'repo via llmfit'}</small>
-        <button class="download" type="button" data-repo="${esc(repo)}" data-file="" data-quant="${esc(quant)}">Download</button>
+        <button class="download" type="button" data-repo="${esc(repo)}" data-quant="${esc(quant)}"${btnDisabled}${btnInstalled}${btnTitle}>${btnLabel}</button>
       </div>
       <span class="stub">tear to install →</span>
     </div>
@@ -242,15 +467,17 @@ async function fetchCatalog(){
         requestAnimationFrame(()=> el.style.width=w);
       });
     });
-    // bind downloads
+    // bind downloads — non-blocking: POST 202 returns job_id, dock polls progress
     grid.querySelectorAll('.download').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const repo=btn.dataset.repo;
         const quant=btn.dataset.quant;
-        if(!repo){ toast('No repo for this model — try search'); return; }
+        if(!repo){ toast('No repo for this model — try search','warning'); return; }
+        if(btn.disabled) return;
         btn.disabled=true;
+        btn.dataset._busy='1';
         const prev=btn.textContent;
-        btn.textContent='Downloading…';
+        btn.textContent='Queued…';
         try{
           const resp=await fetch(`${API_BASE}/api/models/download`,{
             method:'POST',
@@ -258,14 +485,40 @@ async function fetchCatalog(){
             body: JSON.stringify({repo_id: repo, quant: quant || undefined})
           });
           const data=await resp.json().catch(()=>({}));
-          if(!resp.ok) throw new Error(data.detail || data['Exception occured'] || `HTTP ${resp.status}`);
-          toast(`Saved to ${data.path || repo}`);
-          fetchLocal();
+          if(resp.status===202 && data.job_id){
+            const job = data.job || {id:data.job_id, repo_id:repo, quant, status:'queued', progress:0, created_at: new Date().toISOString()};
+            dockJobs.set(job.id, job);
+            ensureDockPolling();
+            renderDock();
+            showDock();
+            toast(`Queued download: ${repo} ${quant ? '('+quant+')' : ''}`, 'info');
+          } else if(resp.status===409) {
+            const isInstalled = (data.detail||'').includes('already installed');
+            throw new Error(data.detail || (isInstalled ? 'Model already installed' : 'A download is already in progress — please wait'));
+          } else if(!resp.ok) {
+            throw new Error(data.detail || data['Exception occured'] || `HTTP ${resp.status}`);
+          } else {
+            toast(`Saved to ${data.path || repo}`, 'success');
+            fetchLocal();
+            btn.disabled=false;
+            btn.textContent=prev;
+            delete btn.dataset._busy;
+          }
         }catch(e){
-          toast(e.message || 'Download failed');
-        }finally{
-          btn.disabled=false;
-          btn.textContent=prev;
+          const msg = e.message || 'Download failed';
+          const type = msg.includes('already in progress') ? 'warning' : msg.includes('already installed') ? 'warning' : 'error';
+          if(msg.includes('already installed')){
+            btn.textContent='✓ Installed';
+            btn.disabled=true;
+            btn.dataset.installed='1';
+            btn.style.background='var(--lab-moss)';
+            btn.style.borderColor='var(--lab-moss)';
+          } else {
+            btn.disabled=false;
+            btn.textContent=prev;
+            delete btn.dataset._busy;
+          }
+          toast(msg, type);
         }
       });
     });
@@ -298,3 +551,15 @@ renderProviderMenu();
 fetchSystem();
 fetchLocal();
 fetchCatalog();
+
+// restore existing downloads on load (if any) and start polling
+(async ()=>{
+  try{
+    const r = await fetch(`${API_BASE}/api/downloads`);
+    if(r.ok){
+      const d = await r.json();
+      (d.jobs||[]).forEach(j=> dockJobs.set(j.id, j));
+      if(dockJobs.size>0){ ensureDockPolling(); renderDock(); }
+    }
+  }catch{}
+})();
