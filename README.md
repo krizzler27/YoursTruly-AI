@@ -1,7 +1,39 @@
 # YoursTruly AI
 
-YoursTruly AI is a local-first, private personal AI assistant that runs entirely on-device on small language models. It is designed as a lightweight alternative to cloud-hosted assistants, with no data leaving the machine, no subscription, and full user control.
+**Local chat. No cloud. Runs entirely on-device**
 
-The core thesis is that SLMs are sufficient for personal assistance when the orchestration around them is strong. Models are treated as the fixed, constrained ingredient and the engineering around them compensates for limitations in tool use, context window, and multi-step reasoning.
+> Under active development, scaffolding will change.
 
-The project is intentionally local and self-hosted, starting with quantized models via Ollama on desktop and designed to extend to low-end and mobile runtimes via llama.cpp and ONNX Runtime.
+## Core Idea
+
+Small models are sufficient for personal assistance when the orchestration around them is strong. Models are the fixed, constrained ingredient; the engineering around them handles context, continuity, and reliability. Everything runs locally and no data leaves the device. 
+
+> Baseline is 8GB RAM with no GPU and it scales to above, not scoped only to baseline.
+
+## What It Does
+
+A private chat that runs fully on-device with persistent history and streaming replies.
+
+## Features
+
+- Model Marketplace
+- One-Click Download
+- Hardware Inspect
+
+## How It Runs
+
+Built on `llama.cpp` via `llama-cpp-python` for in-process inference, offline by default, auto-tuned for low-end hardware.
+
+## Stack
+
+| Technology | Used For |
+| --- | --- |
+| Python 3.11 | Backend language |
+| FastAPI | API and streaming |
+| llama.cpp | Local inference |
+| SQLite | Conversation storage |
+| Vanilla JS | Frontend |
+
+## Status
+
+Still under development. Expect changes.\*

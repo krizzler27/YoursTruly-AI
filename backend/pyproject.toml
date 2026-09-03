@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "YoursTruly-AI"
 version = "0.1.0"
-description = "Local-first private AI assistant on SLMs, self-hosted via Ollama"
+description = "Local-first private AI assistant on SLMs, inference with llama.cpp"
 requires-python = "==3.11.*"
 dependencies = [
     "fastapi>=0.141.1",
