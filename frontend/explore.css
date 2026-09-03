@@ -117,10 +117,15 @@
 .filter-group { display:flex; gap:10px; align-items:center; }
 .filter-select { display:flex; align-items:center; gap:6px; background:var(--lab-paper); border:1px solid var(--lab-border); border-radius:999px; padding:6px 10px; }
 .filter-select select { border:0; background:transparent; font-family:'Instrument Sans',sans-serif; font-size:13px; }
-.chip-row { display:flex; flex-wrap:wrap; gap:6px; margin-left:auto; }
-.chip { font-family:'Instrument Sans',sans-serif; font-size:12px; padding:6px 10px; border-radius:999px; border:1px solid var(--lab-border); background:white; cursor:pointer; }
-.chip.active { background:var(--lab-chassis); color:var(--lab-paper); border-color:var(--lab-chassis); }
-.chip:focus-visible { outline:2px solid var(--lab-ember); outline-offset:1px; }
+.providers-wrap { position:relative; padding-right:8px; gap:6px; }
+.providers-wrap span:first-child { white-space:nowrap; }
+.provider-btn { border:0; background:transparent; font-size:13px; font-weight:600; cursor:pointer; min-width:38px; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; padding:2px 6px 2px 0; color:var(--lab-chassis); }
+.provider-btn:focus-visible { outline:2px solid var(--lab-ember); outline-offset:2px; border-radius:4px; }
+.provider-menu { position:absolute; top:calc(100% + 8px); right:0; min-width:180px; background:var(--lab-chassis); border:1px solid var(--lab-chassis); border-radius:12px; padding:8px; display:flex; flex-direction:column; gap:4px; box-shadow:0 12px 28px rgba(0,0,0,0.18); z-index:20; }
+.provider-menu[hidden] { display:none !important; }
+.provider-option { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; color:var(--lab-paper); cursor:pointer; font-size:13px; }
+.provider-option:hover { background: color-mix(in srgb, var(--lab-paper) 10%, transparent); }
+.provider-option input { accent-color: var(--lab-ember); width:14px; height:14px; }
 .primary { background:var(--lab-ember); color:white; border:1px solid var(--lab-ember); border-radius:999px; padding:8px 14px; cursor:pointer; font-weight:600; }
 .primary:hover { filter:brightness(0.96); }
 .ghost { background:white; border:1px solid var(--lab-border); border-radius:999px; padding:6px 10px; cursor:pointer; }

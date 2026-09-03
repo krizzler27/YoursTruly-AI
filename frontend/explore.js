@@ -21,7 +21,9 @@ const countEl = $('#catalogCount');
 const pathEl = $('#catalogPath');
 const statusEl = $('#catalogStatus');
 const emptyEl = $('#emptyCatalog');
-const chipsEl = $('#providerChips');
+const providerBtn = $('#providerBtn');
+const providerMenu = $('#providerMenu');
+const providersWrap = $('#providersWrap');
 const searchEl = $('#search');
 const limitEl = $('#limit');
 const sortEl = $('#sort');
@@ -30,7 +32,7 @@ const includeCommunityEl = $('#includeCommunity');
 const toastEl = $('#toast');
 
 const PROVIDERS = ['meta','alibaba','google','mistral','microsoft','deepseek'];
-let activeProviders = new Set();
+let selectedProviders = new Set(PROVIDERS);
 let lastData = null;
 
 function toast(msg){
@@ -41,20 +43,47 @@ function toast(msg){
 }
 function esc(s){ return s.replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
-function renderProviderChips(){
-  chipsEl.innerHTML='';
+function formatProvidersLabel(set){
+  if(!set || set.size===0 || set.size===PROVIDERS.length) return 'All';
+  const csv = [...set].join(', ');
+  // truncate to fit button ~14 chars; actual overflow also handled by CSS
+  if(csv.length > 14) return csv.slice(0,10).trimEnd() + '…';
+  return csv;
+}
+function renderProviderMenu(){
+  providerMenu.innerHTML='';
   PROVIDERS.forEach(p=>{
-    const btn=document.createElement('button');
-    btn.type='button';
-    btn.className='chip' + (activeProviders.has(p) ? ' active' : '');
-    btn.textContent=p;
-    btn.setAttribute('aria-pressed', activeProviders.has(p) ? 'true':'false');
-    btn.addEventListener('click', ()=>{
-      if(activeProviders.has(p)) activeProviders.delete(p); else activeProviders.add(p);
-      renderProviderChips();
+    const label=document.createElement('label');
+    label.className='provider-option mono';
+    const cb=document.createElement('input');
+    cb.type='checkbox';
+    cb.value=p;
+    cb.checked=selectedProviders.has(p);
+    cb.addEventListener('change', ()=>{
+      if(cb.checked) selectedProviders.add(p); else selectedProviders.delete(p);
+      providerBtn.textContent=formatProvidersLabel(selectedProviders);
+      providerBtn.title=[...selectedProviders].join(', ') || 'All';
     });
-    chipsEl.appendChild(btn);
+    const span=document.createElement('span');
+    span.textContent=p;
+    label.append(cb, span);
+    providerMenu.appendChild(label);
   });
+  providerBtn.textContent=formatProvidersLabel(selectedProviders);
+  providerBtn.title=[...selectedProviders].join(', ') || 'All';
+}
+function getSelectedProviders(){
+  return [...selectedProviders];
+}
+function resetProviders(){
+  selectedProviders=new Set(PROVIDERS);
+  renderProviderMenu();
+}
+function toggleProviderMenu(force){
+  const willOpen = typeof force==='boolean' ? force : providerMenu.hidden;
+  providerMenu.hidden=!willOpen;
+  providerBtn.setAttribute('aria-expanded', String(willOpen));
+  providersWrap.classList.toggle('open', willOpen);
 }
 
 async function fetchSystem(){
@@ -177,16 +206,20 @@ async function fetchCatalog(){
   grid.innerHTML='<div class="skeleton mono">Probing llmfit catalog…</div>';
   emptyEl.hidden=true;
   statusEl.textContent='loading…';
-  const params=new URLSearchParams();
-  params.set('limit', limitEl.value);
-  params.set('sort', sortEl.value);
-  if(perfectOnlyEl.checked) params.set('perfect_only','true');
-  if(includeCommunityEl.checked) params.set('include_community','true');
-  if(activeProviders.size) params.set('providers', [...activeProviders].join(','));
-  else params.set('providers','');
-  // if no providers and not includeCommunity, backend will use trusted set; we send empty to force trusted
+  const providers = getSelectedProviders();
+  const body = {
+    limit: parseInt(limitEl.value,10) || 20,
+    sort: sortEl.value,
+    perfect_only: !!perfectOnlyEl.checked,
+    include_community: !!includeCommunityEl.checked,
+    providers: providers,
+  };
   try{
-    const r=await fetch(`${API_BASE}/api/catalog?${params.toString()}`);
+    const r=await fetch(`${API_BASE}/api/catalog`,{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify(body)
+    });
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const j=await r.json();
     lastData=j;
@@ -246,18 +279,22 @@ async function fetchCatalog(){
 $('#applyFilters').addEventListener('click', fetchCatalog);
 $('#resetFilters').addEventListener('click', ()=>{
   searchEl.value='';
-  perfectOnlyEl.checked=false;
+  perfectOnlyEl.checked=true;
   includeCommunityEl.checked=false;
   limitEl.value='20';
   sortEl.value='score';
-  activeProviders.clear();
-  renderProviderChips();
+  resetProviders();
   fetchCatalog();
 });
 searchEl.addEventListener('keydown', e=>{ if(e.key==='Enter') fetchCatalog(); });
 $('#refreshLocal').addEventListener('click', fetchLocal);
+providerBtn.addEventListener('click', ()=> toggleProviderMenu());
+document.addEventListener('click', (e)=>{
+  if(!providersWrap.contains(e.target)) toggleProviderMenu(false);
+});
+providerMenu.addEventListener('click', e=> e.stopPropagation());
 
-renderProviderChips();
+renderProviderMenu();
 fetchSystem();
 fetchLocal();
 fetchCatalog();

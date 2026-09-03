@@ -83,12 +83,16 @@
       <div class="filter-ribbon" role="toolbar" aria-label="Catalog filters">
         <label class="filter-search"><span class="mono">Search</span><input id="search" type="search" placeholder="qwen, llama, mistral…" autocomplete="off" /></label>
         <div class="filter-group">
-          <label class="mono"><input type="checkbox" id="perfectOnly" /> Perfect only</label>
+          <label class="mono"><input type="checkbox" id="perfectOnly" checked /> Perfect only</label>
           <label class="mono"><input type="checkbox" id="includeCommunity" /> Include community</label>
         </div>
         <label class="filter-select mono">Limit <select id="limit"><option>12</option><option selected>20</option><option>40</option></select></label>
-        <label class="filter-select mono">Sort <select id="sort"><option value="score" selected>Fit score</option><option value="tps">Speed</option><option value="vram">VRAM</option></select></label>
-        <div class="chip-row" id="providerChips" role="group" aria-label="Providers"></div>
+        <label class="filter-select mono">Sort <select id="sort"><option value="score" selected>Fit score</option><option value="tps">Speed</option><option value="mem">VRAM need</option></select></label>
+        <div class="filter-select mono providers-wrap" id="providersWrap">
+          <span>Providers</span>
+          <button type="button" id="providerBtn" class="provider-btn mono" aria-haspopup="true" aria-expanded="false" title="All providers">All</button>
+          <div id="providerMenu" class="provider-menu" hidden role="group" aria-label="Providers"></div>
+        </div>
         <button id="applyFilters" class="primary mono" type="button">Apply</button>
         <button id="resetFilters" class="ghost small mono" type="button">Reset</button>
       </div>
