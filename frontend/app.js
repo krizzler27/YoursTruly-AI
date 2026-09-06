@@ -400,9 +400,8 @@ function renderHistory() {
       menuBtn.setAttribute('aria-label', 'Conversation menu');
       menuBtn.setAttribute('aria-haspopup', 'true');
       menuBtn.setAttribute('aria-expanded', isMenuOpen ? 'true' : 'false');
-      menuBtn.textContent = '⋯';
+      menuBtn.textContent = '⋮';
       menuBtn.disabled = isStreaming;
-      menuBtn.title = 'Rename / Delete';
       menuBtn.addEventListener('click', e => {
         e.stopPropagation();
         if (isStreaming) return;
@@ -454,6 +453,18 @@ function renderHistory() {
     }
     historyList.appendChild(div);
   });
+  // dynamic placement: flip to open-up if not enough space below
+  if (openHistoryMenuId) {
+    const openItem = historyList.querySelector(`.history-item[data-id="${openHistoryMenuId}"]`);
+    const openMenu = openItem ? openItem.querySelector('.history-menu') : null;
+    if (openItem && openMenu && !openMenu.hidden) {
+      const rect = openItem.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const need = 84;
+      if (spaceBelow < need + 12) openMenu.classList.add('open-up');
+      else openMenu.classList.remove('open-up');
+    }
+  }
 }
 
 async function loadConversations() {
