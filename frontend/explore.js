@@ -316,12 +316,56 @@ if(dockClose) dockClose.addEventListener('click', ()=>{
 if(dockFab) dockFab.addEventListener('click', showDock);
 
 async function fetchSystem(){
+  // cached 60s to avoid refetch on tab switch; hardware changes slowly
+  const hwKey = 'yt_hw_cache';
+  try{
+    const c = JSON.parse(localStorage.getItem(hwKey)||'null');
+    if(c && c.ts && Date.now() - c.ts < 60*1000 && c.data){
+      const j=c.data;
+      const sys=j.system || j.raw?.system || {};
+      const ramAvail = sys.available_ram_gb ?? sys.memory_available_gb ?? 0;
+      const ramTotal = sys.total_ram_gb ?? 0;
+      const vram = sys.gpu_vram_gb ?? sys.vram_gb ?? sys.gpus?.[0]?.vram_gb ?? 0;
+      const cores = sys.cpu_cores ?? '—';
+      const cpuName = sys.cpu_name ?? '—';
+      const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '—';
+      if(hwDot) hwDot.classList.remove('off');
+      if(hwStatus) hwStatus.textContent = 'hardware ready (cached)';
+      if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
+      if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
+      if(kpiCores) kpiCores.textContent = String(cores);
+      if(kpiGpu) kpiGpu.textContent = String(gpu).slice(0,28);
+      if(kpiCpuName) kpiCpuName.textContent = String(cpuName);
+      if(kpiTotalRam) kpiTotalRam.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB` : '—';
+      const ramBase = Number(ramTotal) || 16;
+      const ramPct = Math.min(100, (Number(ramAvail)||8)/ramBase*100);
+      if(ramFill){ ramFill.style.width = ramPct + '%'; ramFill.className = ramPct > 85 ? 'over' : ''; }
+      if(totalRamFill){ totalRamFill.style.width = '100%'; }
+      if(kpiTotalRamMeta) kpiTotalRamMeta.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB installed` : 'installed';
+      const vramPct = vram ? Math.min(100, Number(vram)/ramBase*100) : 35;
+      if(vramFill) vramFill.style.width = vramPct + '%';
+      if(kpiRamMeta) kpiRamMeta.textContent = ramTotal ? `${Number(ramAvail).toFixed(1)} free / ${Number(ramTotal).toFixed(1)} total` : `available`;
+      if(kpiVramMeta) kpiVramMeta.textContent = vram ? `${vram} GB VRAM` : `CPU only`;
+      if(hwExtra){
+        hwExtra.innerHTML = '';
+        const chips = [];
+        if(sys.gpu_available_gb != null) chips.push(`GPU free ${sys.gpu_available_gb} GB`);
+        if(sys.memory_bandwidth_gbps || sys.gpus?.[0]?.memory_bandwidth_gbps) chips.push(`BW ${sys.memory_bandwidth_gbps ?? sys.gpus[0].memory_bandwidth_gbps} GB/s`);
+        chips.forEach(c=>{ const s=document.createElement('span'); s.textContent=c; hwExtra.appendChild(s); });
+        if(!chips.length) hwExtra.textContent = '';
+      }
+      if(hardwareLoading) hardwareLoading.hidden = true;
+      if(hwStack) hwStack.hidden = false;
+      return;
+    }
+  }catch{}
   if(hardwareLoading) hardwareLoading.hidden = false;
   if(hwStack) hwStack.hidden = true;
   try{
     const r=await fetch(`${API_BASE}/api/system`);
     if(!r.ok) throw new Error();
     const j=await r.json();
+    try{ localStorage.setItem(hwKey, JSON.stringify({ts: Date.now(), data: j})); }catch{}
     const sys=j.system || j.raw?.system || {};
     const ramAvail = sys.available_ram_gb ?? sys.memory_available_gb ?? 0;
     const ramTotal = sys.total_ram_gb ?? 0;
@@ -411,7 +455,9 @@ async function fetchLocal(){
   try{
     const r=await fetch(`${API_BASE}/api/models`);
     const j=await r.json();
-    const models=j.models||[];
+    const rawModels=j.models||[];
+    // handle kv {name,path} from new API or old string array
+    const models=rawModels.map(m=> typeof m==='string' ? m : (m.name || m.path || String(m)));
     const details=j.details||[];
     installedSet = new Set(models.map(m=>String(m).toLowerCase()));
     installedDetails = details;
@@ -608,6 +654,16 @@ function bindDownloadButtons(){
     });
   });
 }
+function isHardRefresh(){
+  try{
+    const nav = performance.getEntriesByType('navigation')[0];
+    if(nav) return nav.type === 'reload';
+  }catch{}
+  try{ return performance.navigation && performance.navigation.type === 1; }catch{ return false; }
+}
+function catalogCacheKey(body){
+  return `yt_catalog_${body.sort}_${body.perfect_only}_${body.include_community}_${(body.providers||[]).join(',')}_${body.limit}`;
+}
 async function fetchCatalog(){
   grid.innerHTML='<div class="loading-state mono"><div class="spinner"></div><span>Loading models…</span></div>';
   emptyEl.hidden=true;
@@ -627,6 +683,34 @@ async function fetchCatalog(){
     include_community: includeCommunity,
     providers: providers,
   };
+  const cacheKey = catalogCacheKey(body);
+  try{
+    const cached = JSON.parse(localStorage.getItem(cacheKey)||'null');
+    if(cached && cached.ts && Date.now() - cached.ts < 30*60*1000 && cached.data){
+      lastData=cached.data;
+      const models=lastData.models||[];
+      const filtered=applyClientFilters(models);
+      currentFiltered = filtered;
+      if(countEl) countEl.textContent=`${filtered.length} models • ${lastData.meta?.total ?? models.length} total (cached)`;
+      if(pathEl) pathEl.textContent='';
+      if(statusEl) statusEl.textContent='cached';
+      if(!filtered.length){
+        grid.innerHTML='';
+        emptyEl.hidden=false;
+        if(loadMoreWrap) loadMoreWrap.hidden=true;
+        return;
+      }
+      emptyEl.hidden=true;
+      const slice = filtered.slice(0, displayed);
+      grid.innerHTML=slice.map(cardTemplate).join('');
+      bindDownloadButtons();
+      refreshInstalledButtons();
+      const jobs = [...dockJobs.values()].filter(j=> j.status==='queued'||j.status==='downloading');
+      if(jobs.length) updateCardButtons(jobs);
+      updateLoadMore();
+      return;
+    }
+  }catch{}
   try{
     const r=await fetch(`${API_BASE}/api/catalog`,{
       method:'POST',
@@ -636,6 +720,7 @@ async function fetchCatalog(){
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const j=await r.json();
     lastData=j;
+    try{ localStorage.setItem(cacheKey, JSON.stringify({ts: Date.now(), data: j})); }catch{}
     const models=j.models||[];
     const filtered=applyClientFilters(models);
     currentFiltered = filtered;

@@ -5,10 +5,6 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def _default_model_path() -> str:
-    return str(Path.home() / ".yourstrulyai" / "models" / "qwen2.5-3b-instruct-Q4_K_M.gguf")
-
-
 def _default_models_dir() -> str:
     return str(Path.home() / ".yourstrulyai" / "models")
 
@@ -19,7 +15,6 @@ class Config(BaseSettings):
         extra="ignore",
     )
 
-    LLAMA_MODEL: str = _default_model_path()
     LLAMA_MODEL_PATH: str = _default_models_dir()
     LLAMA_N_CTX: Optional[int] = None  # auto: 2048 (8GB) / 4096 (≥12GB)
     LLAMA_N_THREADS: Optional[int] = None  # auto: psutil physical cores

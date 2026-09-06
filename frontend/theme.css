@@ -431,11 +431,15 @@ main {
   user-select: none;
   transition: background 120ms ease;
   color: var(--foreground) !important;
+  width: 180px;
+  max-width: 180px;
+  justify-content: flex-start;
 }
 .model-pill:hover { background: #EDE9E1; }
-.model-pill #modelName { color: var(--foreground); }
-.model-pill .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--online); }
-.model-pill .chev { opacity: 0.45; color: var(--muted-foreground); }
+.model-pill #modelName { color: var(--foreground); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.model-pill .model-quant-pill { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted-foreground); flex: 0 0 auto; margin-left: auto; }
+.model-pill .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--online); flex: 0 0 auto; }
+.model-pill .chev { opacity: 0.45; color: var(--muted-foreground); flex: 0 0 auto; }
 .hint {
   font-size: 11px; color: var(--muted-foreground);
   font-family: 'JetBrains Mono', monospace;
@@ -453,21 +457,41 @@ main {
 .send:disabled { opacity: 0.45; cursor: not-allowed; }
 .send:hover:not(:disabled) { background: var(--signal-hover) !important; }
 
-/* Model menu */
+/* Model menu — opens upward when in sticky composer */
 .model-menu {
   min-width: 260px;
   padding: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+ot-dropdown { position: relative; }
+.model-menu[popover] {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  top: auto;
+  left: 0;
+  right: auto;
+  inset-inline-start: 0;
+}
+@supports (position-area: block-start) {
+  .model-menu[popover] { position-area: block-start; }
 }
 .model-option {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px;
   padding: 9px 10px;
   border-radius: 8px;
   font-size: 13.5px;
   cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
 }
+.model-option .model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.model-option .model-quant { flex: 0 0 auto; margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--border); background: var(--faint); }
 .model-option:hover { background: var(--faint); }
 .model-option.active { background: var(--ink); color: var(--paper); }
 .model-option small { color: var(--muted-foreground); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.model-option.active .model-quant { background: transparent; border-color: var(--paper); color: var(--paper); }
 .model-option.active small { color: #C8C5BE; }
 
 /* Footer meta */

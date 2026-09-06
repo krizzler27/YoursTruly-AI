@@ -2,13 +2,13 @@
 
 **Local chat. No cloud. Runs entirely on-device**
 
-> Under active development, scaffolding will change.
+> Under active development.
 
 ## Core Idea
 
-Small models are sufficient for personal assistance when the orchestration around them is strong. Models are the fixed, constrained ingredient; the engineering around them handles context, continuity, and reliability. Everything runs locally and no data leaves the device. 
+Small models are sufficient for personal assistance when the orchestration around them is strong. Models are the fixed, constrained ingredient; the engineering around them handles context, continuity, and reliability. Everything runs locally and no data leaves the device.
 
-> Baseline is 8GB RAM with no GPU and it scales to above, not scoped only to baseline.
+> Baseline is 8GB RAM with no GPU and it scales per system, not scoped only to baseline. Model optimization handled automatically based on system hardware specifications.
 
 ## What It Does
 
@@ -36,4 +36,4 @@ Built on `llama.cpp` via `llama-cpp-python` for in-process inference, offline by
 
 ## Status
 
-Still under development. Expect changes.\*
+Still under development. Expect changes.

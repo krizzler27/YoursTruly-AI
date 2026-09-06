@@ -1,42 +1,27 @@
+from threading import Thread, Lock
+from queue import Empty, Queue
+from fastapi import Request
+from pathlib import Path
 import asyncio
+import psutil
 import gc
 import os
-from pathlib import Path
-from queue import Empty, Queue
-from threading import Thread, Lock
+
 from typing import AsyncGenerator, Dict, List, Optional
-
-from fastapi import Request
-
-from config import config
 from services.prompt_manager import PromptManager
-
-# lazy psutil — optional, fallback to os.cpu_count
-try:
-    import psutil
-except ImportError:
-    psutil = None
+from config import config
 
 
 def get_physical_cores() -> int:
     """Physical cores via psutil, fallback to logical//2."""
-    if psutil is not None:
-        try:
-            cores = psutil.cpu_count(logical=False)
-            if cores:
-                return int(cores)
-        except Exception:
-            pass
-    return max(1, (os.cpu_count() or 4) // 2)
+    cores = psutil.cpu_count(logical=False)
+    return int(cores) if cores else max(1, (os.cpu_count() or 4) // 2)
 
 
 def get_total_ram_gb() -> float:
-    if psutil is not None:
-        try:
-            return psutil.virtual_memory().total / (1024**3)
-        except Exception:
-            pass
-    return 8.0
+    """Total RAM in GB via psutil, fallback 8.0 if undetermined."""
+    total = psutil.virtual_memory().total
+    return total / (1024**3) if total else 8.0
 
 
 def get_default_ctx() -> int:
@@ -52,10 +37,38 @@ class LlamaEngine:
     _lock: Lock = Lock()
 
     def __init__(self, model_path: Optional[str] = None):
-        self.model_path = model_path or config.LLAMA_MODEL
-        self.llm = None  # llama_cpp.Llama
+        self.model_path: Optional[str] = model_path
+        self.llm = None
         self._generating = False
         self._gen_lock = Lock()
+
+    @staticmethod
+    def _discover_models() -> List[Path]:
+        """List installed GGUFs sorted by most recent mtime first."""
+        models_dir = Path(config.LLAMA_MODEL_PATH)
+        try:
+            return sorted(
+                [p for p in models_dir.glob("*.gguf") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            return []
+
+    def switch_model(self, full_path: Optional[str]) -> None:
+        """Switch to GGUF at full path."""
+        if not full_path or not full_path.strip():
+            return
+        if self.is_generating():
+            raise RuntimeError("System Busy — model is generating. Try again.")
+        p = Path(full_path.strip())
+        if not p.exists() or not p.is_file() or p.suffix.lower() != ".gguf":
+            raise FileNotFoundError(f"Model not found: {full_path}")
+        if self.model_path and Path(self.model_path).resolve() == p.resolve() and self.is_loaded():
+            return
+        self.unload()
+        self.model_path = str(p)
+        self.load()
 
     @classmethod
     def get_instance(cls) -> "LlamaEngine":
@@ -76,31 +89,22 @@ class LlamaEngine:
             self._generating = value
 
     def load(self) -> None:
-        """Load GGUF via universal Vulkan (try -1) else CPU fallback."""
+        """Load most recent GGUF."""
         if self.is_loaded():
             return
-        # validate model file exists — downstream handles auto-download
-        mp = Path(self.model_path)
-        if not mp.exists():
-            raise FileNotFoundError(
-                f"Model not found at {self.model_path}. "
-                f"Place qwen2.5-3b-Q4_K_M.gguf in {Path(config.LLAMA_MODEL_PATH)} "
-                f"or trigger auto-download."
-            )
-        # lazy import — allows spike without wheel installed
+        disc = self._discover_models()
+        mp = Path(self.model_path) if self.model_path and Path(self.model_path).exists() else (disc[0] if disc else None)
+        if mp is None or not mp.exists():
+            raise FileNotFoundError(f"No GGUF in {Path(config.LLAMA_MODEL_PATH)}. Download a model via Explore.")
+        self.model_path = str(mp)
         try:
             import llama_cpp
             from llama_cpp import Llama
         except ImportError as e:
-            raise RuntimeError(
-                "llama-cpp-python not installed. Run: "
-                "pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/wheels/avx2 "
-                "or .../wheels/vulkan for GPU"
-            ) from e
+            raise RuntimeError("llama-cpp-python not installed.") from e
 
         cores = config.LLAMA_N_THREADS or get_physical_cores()
         ctx = get_default_ctx()
-        # explicit 8GB tuning: q4_0 KV, flash_attn, small batches
         common_kwargs = dict(
             model_path=str(mp),
             n_ctx=ctx,
@@ -115,10 +119,8 @@ class LlamaEngine:
             use_mlock=False,
             verbose=False,
         )
-        # universal Vulkan: -1 if driver present, else CPU 0
         gpu_layers = config.LLAMA_N_GPU_LAYERS
         if gpu_layers is None:
-            # try Vulkan first — single exe path
             try:
                 self.llm = Llama(n_gpu_layers=-1, **common_kwargs)
             except Exception:
@@ -126,7 +128,6 @@ class LlamaEngine:
         else:
             self.llm = Llama(n_gpu_layers=int(gpu_layers), **common_kwargs)
 
-        # warmup fault mmap pages — 1 token to hit <1s TTFT
         try:
             list(self.llm.create_chat_completion(
                 messages=[{"role": "user", "content": "hi"}],
@@ -137,7 +138,6 @@ class LlamaEngine:
             pass
 
     def unload(self) -> None:
-        """Explicit release for model switch on 8GB."""
         if self.llm is not None:
             try:
                 del self.llm
@@ -149,7 +149,7 @@ class LlamaEngine:
     async def astream_chat(
         self, messages: List[Dict[str, str]], request: Optional[Request] = None
     ) -> AsyncGenerator[str, None]:
-        """Thread-safe streaming — C++ iterator on worker thread."""
+        """Stream via worker thread + queue."""
         if not self.is_loaded():
             # lazy load on first chat if lifespan not warmed
             try:
@@ -204,14 +204,23 @@ class LlamaEngine:
             self._set_generating(False)
 
     def health(self) -> Dict[str, object]:
-        mp = Path(self.model_path)
+        disc = self._discover_models()
+        if disc:
+            mp = Path(self.model_path) if self.model_path and Path(self.model_path).exists() else disc[0]
+            status = "ready"
+            exists = True
+        else:
+            mp = Path(config.LLAMA_MODEL_PATH) / "no-model.gguf"
+            status = "error"
+            exists = False
         return {
-            "status": "ready" if self.is_loaded() else ("loading" if mp.exists() else "error"),
-            "model": mp.name if mp.name else "qwen2.5-3b-Q4_K_M.gguf",
+            "status": status,
+            "model": mp.name if mp.name != "no-model.gguf" else None,
             "path": str(mp),
-            "exists": mp.exists(),
+            "exists": exists,
             "loaded": self.is_loaded(),
             "generating": self.is_generating(),
+            "available": [p.name for p in disc],
         }
 
     @classmethod

@@ -29,7 +29,6 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         history_prev = chat_service.get_history(conversation.id, limit=5)
         chat_service.add_message(conversation.id, "user", request.query)
 
-        # single-slot guard — 429 System Busy before spawning worker
         engine = LlamaEngine.get_instance()
         if engine.is_generating():
             return JSONResponse(
@@ -37,15 +36,15 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
                 content={"detail": "System Busy — model is generating. Try again."},
                 headers={"X-Conversation-Id": str(conversation.id)},
             )
-        # build messages via prompt manager (system <150 tokens)
+
+        if request.model and request.model.strip():
+            engine.switch_model(request.model)
+
         messages = LlamaEngine.build_chat_messages(history_prev, request.query)
 
         start_time = time.perf_counter()
-        # optional model override — if request.model given, map to file in models dir
-        # for now ignore override and use singleton model_path; future: resolve gguf by name
         stream = engine.astream_chat(messages=messages, request=http_request)
 
-        # 1. Await the first delta before returning StreamingResponse to calculate TTFT
         try:
             first_delta = await anext(stream)
             ttft_ms = (time.perf_counter() - start_time) * 1000
@@ -67,8 +66,6 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
                 headers={"X-Conversation-Id": str(conversation.id)},
             )
 
-        # 2. Generator that emits the cached first token, then continues the stream
-        # accumulate for assistant persistence
         acc_parts: list[str] = []
         if first_delta:
             acc_parts.append(first_delta)
@@ -82,7 +79,6 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
                     acc_parts.append(delta)
                     yield f"data: {json.dumps({'content': delta})}\n\n"
 
-            # persist assistant message after stream completes
             full_response = "".join(acc_parts).strip()
             if full_response:
                 try:
@@ -92,7 +88,6 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
 
             yield "data: [DONE]\n\n"
 
-        # 3. Pass the calculated TTFT + conversation id to headers
         return StreamingResponse(
             sse_wrap(),
             media_type="text/event-stream",

@@ -218,7 +218,7 @@ class LLMFitServices:
                 except Exception:
                     size_gb = 0
                     mtime = 0
-                infos.append({"name": p.name, "size_gb": size_gb, "size_bytes": st.st_size if 'st' in locals() else 0, "modified": mtime})
+                infos.append({"name": p.name, "path": str(p), "size_gb": size_gb, "size_bytes": st.st_size if 'st' in locals() else 0, "modified": mtime})
             return infos
         except Exception as e:
             logger.warning("list_local_info failed %s: %s", self.models_dir, e)

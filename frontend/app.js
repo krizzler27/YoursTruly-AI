@@ -151,7 +151,8 @@ async function checkModelHealth() {
     const r = await fetch(`${API_BASE}/api/health`, { headers: { 'accept': 'application/json' } });
     if (!r.ok) return false;
     const data = await r.json();
-    return data.status === 'ready' && !!data.loaded;
+    // dynamic: idle = GGUF exists but not yet mmap-loaded — lazy loads on first chat, still healthy
+    return (data.status === 'ready' || data.status === 'idle') && !!data.exists;
   } catch { return false; }
 }
 
@@ -161,18 +162,21 @@ async function fetchModels(forcedHealthy = null) {
     const r = await fetch(`${API_BASE}/api/models`, { headers: { 'accept': 'application/json' } });
     if (!r.ok) throw new Error('no models');
     const data = await r.json();
-    const models = data.models || [];
+    const models = (data.models || []).map(m => typeof m === 'string' ? { name: m, path: m } : m);
     if (healthy === null) healthy = await checkModelHealth();
     if (models.length) {
       setStatus(healthy, healthy ? 'MODEL READY' : 'MODEL OFFLINE');
       renderModelMenu(models);
       if (!selectedModel) selectedModel = models[0];
-      modelNameEl.textContent = selectedModel;
+      const first = parseModel(selectedModel.name || selectedModel);
+      modelNameEl.textContent = first.base;
+      const pq = document.getElementById('modelQuant');
+      if (pq) { pq.textContent = first.quant; pq.hidden = !first.quant; }
       hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
       hint.style.display = '';
       hint.removeAttribute('hidden');
       setModelPillDisabled(!healthy);
-      if (!healthy) modelNameEl.textContent = selectedModel + ' (loading)';
+      if (!healthy) { const f2 = parseModel(selectedModel.name || selectedModel); modelNameEl.textContent = f2.base; }
       return healthy;
     }
     setStatus(healthy, healthy ? 'no models — add GGUF to ' + (data.path || '~/.yourstrulyai/models') : 'MODEL OFFLINE');
@@ -193,16 +197,34 @@ async function fetchModels(forcedHealthy = null) {
   }
 }
 
+function parseModel(raw) {
+  if (!raw) return { base: '', quant: '' };
+  const baseRaw = raw.replace(/\.gguf$/i, '').trim();
+  const m = baseRaw.match(/^(.*?)[-_](Q\d.*)$/i);
+  if (m) return { base: m[1], quant: m[2] };
+  return { base: baseRaw.replace(/_/g, ' '), quant: '' };
+}
+function displayName(raw) {
+  const p = parseModel(raw);
+  return p.quant ? `${p.base} (${p.quant})` : p.base;
+}
 function renderModelMenu(models) {
   modelMenu.innerHTML = '';
   models.forEach(m => {
+    const name = m.name || m;
+    const path = m.path || m;
+    const isSame = selectedModel && (selectedModel.path === path || selectedModel === m);
     const div = document.createElement('button');
     div.setAttribute('role', 'menuitem');
-    div.className = 'model-option ghost' + (m === selectedModel ? ' active' : '');
-    div.innerHTML = `<span>${escapeHtml(m)}</span><small>${m.split(':').pop()}</small>`;
+    div.className = 'model-option ghost' + (isSame ? ' active' : '');
+    const p = parseModel(name);
+    div.innerHTML = `<span class="model-name" title="${escapeHtml(name)}">${escapeHtml(p.base)}</span>${p.quant ? `<small class="model-quant">${escapeHtml(p.quant)}</small>` : ''}`;
     div.addEventListener('click', () => {
       selectedModel = m;
-      modelNameEl.textContent = m;
+      modelNameEl.textContent = p.base;
+      const pillQuant = document.getElementById('modelQuant');
+      if (pillQuant) pillQuant.textContent = p.quant;
+      if (pillQuant) pillQuant.hidden = !p.quant;
       [...modelMenu.children].forEach(c => c.classList.remove('active'));
       div.classList.add('active');
       try { modelMenu.hidePopover(); } catch {}
@@ -293,7 +315,8 @@ async function send() {
   let ttftDone = false;
 
   try {
-    const payload = { query, model: selectedModel || undefined };
+    const modelPath = selectedModel ? (selectedModel.path || selectedModel) : undefined;
+    const payload = { query, model: modelPath || undefined };
     if (currentConversationId) payload.conversation_id = currentConversationId;
     const resp = await fetch(`${API_BASE}/api/chat/stream`, {
       method: 'POST',

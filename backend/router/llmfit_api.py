@@ -130,21 +130,22 @@ def list_quants(req: QuantsRequest):
 
 @router.get('/models', status_code=status.HTTP_200_OK)
 def models():
-    """List installed models — via LLMFitServices (llmfit-owned)."""
+    """List installed models — key=path, value=name for direct use without Path concat."""
     try:
         svc = LLMFitServices()
-        files = svc.list_local()
-        infos = svc.list_local_info()
-        if not files:
+        infos = svc.list_local_info()  # each {name, path, size_gb, ...}
+        if not infos:
             return JSONResponse(
                 content={
-                    "message": f"No installed models in {Path(config.LLAMA_MODEL_PATH)}. Place qwen2.5-3b-Q4_K_M.gguf there or trigger download.",
+                    "message": f"No installed models in {Path(config.LLAMA_MODEL_PATH)}. Download a model via Explore.",
                     "models": [],
                     "details": [],
                     "path": str(Path(config.LLAMA_MODEL_PATH)),
                 }
             )
-        return JSONResponse(content={"models": files, "details": infos, "path": str(Path(config.LLAMA_MODEL_PATH))})
+        # key-value: frontend uses path as key, name as value
+        kv = [{"name": i["name"], "path": i["path"]} for i in infos]
+        return JSONResponse(content={"models": kv, "details": infos, "path": str(Path(config.LLAMA_MODEL_PATH))})
     except Exception as e:
         return JSONResponse(
             status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}

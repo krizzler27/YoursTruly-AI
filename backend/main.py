@@ -14,14 +14,10 @@ from services.llama_service import LlamaEngine
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # create tables on startup (SQLite, local-first)
     Base.metadata.create_all(bind=engine)
-    # warmup llama engine — mmap fault + <1s TTFT
     try:
-        eng = LlamaEngine.get_instance()
-        eng.load()
+        LlamaEngine.get_instance().load()
     except Exception:
-        # model missing or llama-cpp-python not installed — health will report error
         pass
     yield
     try:
@@ -53,25 +49,24 @@ app.include_router(llmfit_api.router)
 
 @app.get("/api/health", status_code=status.HTTP_200_OK)
 async def health() -> JSONResponse:
-    """Lightweight model health — process + file check, no daemon."""
     try:
         h = LlamaEngine.get_instance().health()
-        # map to MODEL READY / OFFLINE contract for frontend
         status_str = h.get("status", "error")
+        is_healthy = status_str == "ready"
         return JSONResponse(content={
-            "status": status_str,  # ready | loading | error
+            "status": status_str,
             "model": h.get("model"),
             "path": h.get("path"),
             "exists": h.get("exists"),
             "loaded": h.get("loaded"),
             "generating": h.get("generating"),
-            "message": "Server is Healthy" if status_str == "ready" else "Model not loaded",
+            "available": h.get("available", []),
+            "message": "Server is Healthy" if is_healthy else "No model installed — download via Explore",
         })
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
-# frontend — serve vanilla JS + Oat at http://127.0.0.1:8000/
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
