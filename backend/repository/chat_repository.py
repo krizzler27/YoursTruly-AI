@@ -11,10 +11,10 @@ class ChatRepository(BaseRepository[ConversationsModel]):
         super().__init__(ConversationsModel, db)
 
     def list_recent(self, limit: int = 50) -> List[ConversationsModel]:
-        """List conversations newest first."""
+        """List conversations newest first"""
         return (
             self.db.query(self.model)
-            .order_by(self.model.created_at.desc(), self.model.id.desc())
+            .order_by(self.model.updated_at.desc(), self.model.id.desc())
             .limit(limit)
             .all()
         )

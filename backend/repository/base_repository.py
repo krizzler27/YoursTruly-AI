@@ -1,4 +1,6 @@
 from typing import TypeVar, Generic, Type, Optional, List
+import uuid
+
 from sqlalchemy.orm import Session
 from db.models import Base
 
@@ -12,7 +14,7 @@ class BaseRepository(Generic[ModelType]):
         self.model = model
         self.db = db
 
-    def get_by_id(self, id: int) -> Optional[ModelType]:
+    def get_by_id(self, id: uuid.UUID) -> Optional[ModelType]:
         return self.db.query(self.model).filter(self.model.id == id).first()
 
     def list_all(self, skip: int = 0, limit: int = 100) -> List[ModelType]:
@@ -33,7 +35,7 @@ class BaseRepository(Generic[ModelType]):
         return objects
 
 
-    def update(self, id: int, **data) -> Optional[ModelType]:
+    def update(self, id: uuid.UUID, **data) -> Optional[ModelType]:
         obj = self.get_by_id(id)
         if not obj:
             return None
@@ -43,7 +45,7 @@ class BaseRepository(Generic[ModelType]):
         self.db.refresh(obj)
         return obj
 
-    def update_many(self, ids: List[int], **values) -> int:
+    def update_many(self, ids: List[uuid.UUID], **values) -> int:
         """Updates specific fields for multiple IDs in 1 query."""
         rows_updated = (
             self.db.query(self.model)
@@ -53,7 +55,7 @@ class BaseRepository(Generic[ModelType]):
         self.db.commit()
         return rows_updated
 
-    def delete(self, id: int) -> bool:
+    def delete(self, id: uuid.UUID) -> bool:
         obj = self.get_by_id(id)
         if not obj:
             return False
@@ -61,7 +63,7 @@ class BaseRepository(Generic[ModelType]):
         self.db.commit()
         return True
 
-    def delete_many(self, ids: List[int]) -> int:
+    def delete_many(self, ids: List[uuid.UUID]) -> int:
         """Deletes multiple records matching a list of IDs in 1 query."""
         rows_deleted = (
             self.db.query(self.model)
