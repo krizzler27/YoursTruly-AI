@@ -356,31 +356,13 @@ function renderHistory() {
       input.maxLength = 250;
       input.setAttribute('data-rename-input', c.id);
       input.setAttribute('aria-label', 'Rename conversation');
+      input.placeholder = 'Enter to save, Esc to cancel';
       input.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); saveHistoryRename(c.id); }
         if (e.key === 'Escape') { e.preventDefault(); cancelHistoryRename(); }
       });
-      input.addEventListener('blur', () => {
-        setTimeout(() => {
-          if (document.activeElement && document.activeElement.closest && document.activeElement.closest('.history-rename-actions')) return;
-          if (renamingId === c.id) cancelHistoryRename();
-        }, 150);
-      });
-      const actions = document.createElement('div');
-      actions.className = 'history-rename-actions';
-      const saveBtn = document.createElement('button');
-      saveBtn.type = 'button';
-      saveBtn.className = 'save';
-      saveBtn.textContent = '✓';
-      saveBtn.title = 'Save';
-      saveBtn.addEventListener('click', e => { e.stopPropagation(); saveHistoryRename(c.id); });
-      const cancelBtn = document.createElement('button');
-      cancelBtn.type = 'button';
-      cancelBtn.textContent = '×';
-      cancelBtn.title = 'Cancel';
-      cancelBtn.addEventListener('click', e => { e.stopPropagation(); cancelHistoryRename(); });
-      actions.append(saveBtn, cancelBtn);
-      wrap.append(input, actions);
+      // blur alone does not auto-save; document click handler below will save on outside click
+      wrap.appendChild(input);
       div.appendChild(wrap);
       div.addEventListener('click', e => e.stopPropagation());
     } else {
@@ -601,7 +583,28 @@ async function send() {
 
 // History menu + rename + delete — global handlers
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.history-item')) closeHistoryMenu();
+  const insideItem = e.target.closest('.history-item');
+  if (!insideItem) {
+    closeHistoryMenu();
+    if (renamingId) {
+      const input = historyList.querySelector(`[data-rename-input="${renamingId}"]`);
+      const raw = input ? input.value.trim() : '';
+      const orig = conversations.find(x => x.id === renamingId);
+      const origTitle = orig ? orig.title : '';
+      if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(renamingId);
+      else cancelHistoryRename();
+    }
+    return;
+  }
+  // click inside another item while renaming — treat as outside save
+  if (renamingId && insideItem.dataset.id !== renamingId) {
+    const input = historyList.querySelector(`[data-rename-input="${renamingId}"]`);
+    const raw = input ? input.value.trim() : '';
+    const orig = conversations.find(x => x.id === renamingId);
+    const origTitle = orig ? orig.title : '';
+    if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(renamingId);
+    else cancelHistoryRename();
+  }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
