@@ -29,7 +29,6 @@ let renamingId = null;
 let pendingHistoryDeleteId = null;
 
 const historyDeleteModal = $('#historyDeleteModal');
-const historyDeleteName = $('#historyDeleteName');
 const historyDeleteCancel = $('#historyDeleteCancel');
 const historyDeleteConfirm = $('#historyDeleteConfirm');
 
@@ -433,7 +432,6 @@ function renderHistory() {
         e.stopPropagation();
         closeHistoryMenu();
         pendingHistoryDeleteId = c.id;
-        if (historyDeleteName) historyDeleteName.textContent = c.title;
         if (historyDeleteModal && typeof historyDeleteModal.showModal === 'function') {
           try { historyDeleteModal.showModal(); } catch {}
         } else if (historyDeleteModal) historyDeleteModal.setAttribute('open','');
