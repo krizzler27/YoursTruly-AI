@@ -9,7 +9,7 @@ import uuid
 from db.db_engine import get_db
 from services.llama_service import LlamaEngine
 from services.chat_services import ChatServices
-from schemas.api_schemas import ChatRequest, ConversationResponse, MessageResponse
+from schemas.api_schemas import ChatRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -121,6 +121,30 @@ def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
         svc = ChatServices(db)
         rows = svc.list_messages(conversation_id, limit=100)
         return rows
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"detail": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+
+
+@router.patch('/conversations/{conversation_id}', response_model=ConversationResponse)
+def rename_conversation(conversation_id: uuid.UUID, req: ConversationUpdateRequest, db: Session = Depends(get_db)):
+    try:
+        svc = ChatServices(db)
+        conv = svc.rename_conversation(conversation_id, req.title)
+        return conv
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"detail": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+
+
+@router.delete('/conversations/{conversation_id}')
+def delete_conversation(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
+    try:
+        svc = ChatServices(db)
+        svc.delete_conversation(conversation_id)
+        return JSONResponse(content={"status": "deleted", "id": str(conversation_id)})
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
     except Exception as e:

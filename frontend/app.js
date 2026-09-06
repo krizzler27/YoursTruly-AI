@@ -24,6 +24,13 @@ let selectedModel = null;
 let isStreaming = false;
 let currentConversationId = null;
 let conversations = [];
+let openHistoryMenuId = null;
+let renamingId = null;
+let pendingHistoryDeleteId = null;
+
+const historyDeleteModal = $('#historyDeleteModal');
+const historyDeleteCancel = $('#historyDeleteCancel');
+const historyDeleteConfirm = $('#historyDeleteConfirm');
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -238,6 +245,92 @@ function truncateTitle(title, maxLen = 32) {
   return t.length > maxLen ? t.slice(0, maxLen) + '…' : t;
 }
 
+function closeHistoryMenu() {
+  openHistoryMenuId = null;
+  document.querySelectorAll('.history-item.menu-open').forEach(el => el.classList.remove('menu-open'));
+  document.querySelectorAll('.history-menu').forEach(el => el.hidden = true);
+}
+
+function startHistoryRename(id) {
+  if (isStreaming) return;
+  renamingId = id;
+  openHistoryMenuId = null;
+  renderHistory();
+  const input = historyList.querySelector(`[data-rename-input="${id}"]`);
+  if (input) { input.focus(); input.select(); }
+}
+
+function cancelHistoryRename() {
+  renamingId = null;
+  renderHistory();
+}
+
+async function saveHistoryRename(id) {
+  const input = historyList.querySelector(`[data-rename-input="${id}"]`);
+  if (!input) return;
+  const raw = input.value.trim();
+  if (!raw) {
+    input.style.borderColor = 'var(--danger)';
+    input.focus();
+    return;
+  }
+  if (raw.length > 250) {
+    input.style.borderColor = 'var(--danger)';
+    input.focus();
+    return;
+  }
+  const prev = conversations.find(x => x.id === id);
+  const prevTitle = prev ? prev.title : '';
+  if (raw === prevTitle) { cancelHistoryRename(); return; }
+  input.disabled = true;
+  try {
+    const r = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: raw })
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${r.status}`);
+    }
+    const updated = await r.json();
+    const idx = conversations.findIndex(x => x.id === id);
+    if (idx !== -1) conversations[idx].title = updated.title;
+    if (conversations[idx]) conversations[idx].updated_at = updated.updated_at;
+    renamingId = null;
+    await loadConversations();
+  } catch (e) {
+    input.disabled = false;
+    input.style.borderColor = 'var(--danger)';
+    input.focus();
+    console.error(e);
+  }
+}
+
+async function deleteHistoryConversation(id) {
+  if (isStreaming) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${r.status}`);
+    }
+    conversations = conversations.filter(x => x.id !== id);
+    if (currentConversationId === id) {
+      currentConversationId = null;
+      clearThread();
+      showEmpty(true);
+      ttftEl.textContent = '';
+    }
+    renderHistory();
+    await loadConversations();
+  } catch (e) {
+    console.error(e);
+  } finally {
+    pendingHistoryDeleteId = null;
+  }
+}
+
 function renderHistory() {
   if (!conversations.length) {
     historyList.innerHTML = `<div class="empty-hint">No conversations yet.</div>`;
@@ -245,19 +338,113 @@ function renderHistory() {
   }
   historyList.innerHTML = '';
   conversations.forEach(c => {
+    const isActive = c.id === currentConversationId;
+    const isRenaming = renamingId === c.id;
+    const isMenuOpen = openHistoryMenuId === c.id;
     const div = document.createElement('div');
-    div.className = 'history-item' + (c.id === currentConversationId ? ' active' : '');
+    div.className = 'history-item' + (isActive ? ' active' : '') + (isMenuOpen ? ' menu-open' : '');
     div.dataset.id = c.id;
-    const short = truncateTitle(c.title, 32);
-    div.innerHTML = `<span title="${escapeHtml(c.title)}">${escapeHtml(short)}</span>`;
-    div.addEventListener('click', () => {
-      if (isStreaming) return;
-      currentConversationId = c.id;
-      renderHistory();
-      loadMessages(c.id);
-    });
+
+    if (isRenaming) {
+      const wrap = document.createElement('div');
+      wrap.className = 'history-rename-wrap';
+      wrap.addEventListener('click', e => e.stopPropagation());
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'history-rename-input';
+      input.value = c.title;
+      input.maxLength = 250;
+      input.setAttribute('data-rename-input', c.id);
+      input.setAttribute('aria-label', 'Rename conversation');
+      input.placeholder = 'Enter to save, Esc to cancel';
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); saveHistoryRename(c.id); }
+        if (e.key === 'Escape') { e.preventDefault(); cancelHistoryRename(); }
+      });
+      // blur alone does not auto-save; document click handler below will save on outside click
+      wrap.appendChild(input);
+      div.appendChild(wrap);
+      div.addEventListener('click', e => e.stopPropagation());
+    } else {
+      const short = truncateTitle(c.title, 32);
+      const titleEl = document.createElement('span');
+      titleEl.className = 'history-title';
+      titleEl.title = c.title;
+      titleEl.textContent = short;
+      // double-click to rename
+      titleEl.addEventListener('dblclick', e => { e.stopPropagation(); if (!isStreaming) startHistoryRename(c.id); });
+      div.appendChild(titleEl);
+
+      const menuBtn = document.createElement('button');
+      menuBtn.type = 'button';
+      menuBtn.className = 'history-menu-btn';
+      menuBtn.setAttribute('aria-label', 'Conversation menu');
+      menuBtn.setAttribute('aria-haspopup', 'true');
+      menuBtn.setAttribute('aria-expanded', isMenuOpen ? 'true' : 'false');
+      menuBtn.textContent = '⋮';
+      menuBtn.disabled = isStreaming;
+      menuBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (isStreaming) return;
+        if (openHistoryMenuId === c.id) closeHistoryMenu();
+        else { closeHistoryMenu(); openHistoryMenuId = c.id; renderHistory(); }
+      });
+      div.appendChild(menuBtn);
+
+      const menu = document.createElement('div');
+      menu.className = 'history-menu';
+      menu.hidden = !isMenuOpen;
+      menu.setAttribute('role', 'menu');
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'history-menu-item';
+      renameBtn.setAttribute('role', 'menuitem');
+      renameBtn.textContent = 'Rename';
+      renameBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        closeHistoryMenu();
+        startHistoryRename(c.id);
+      });
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'history-menu-item danger';
+      delBtn.setAttribute('role', 'menuitem');
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        closeHistoryMenu();
+        pendingHistoryDeleteId = c.id;
+        if (historyDeleteModal && typeof historyDeleteModal.showModal === 'function') {
+          try { historyDeleteModal.showModal(); } catch {}
+        } else if (historyDeleteModal) historyDeleteModal.setAttribute('open','');
+      });
+      menu.append(renameBtn, delBtn);
+      div.appendChild(menu);
+
+      div.addEventListener('click', () => {
+        if (isStreaming) return;
+        if (renamingId) return;
+        if (openHistoryMenuId) { closeHistoryMenu(); }
+        if (currentConversationId === c.id) return;
+        currentConversationId = c.id;
+        renderHistory();
+        loadMessages(c.id);
+      });
+    }
     historyList.appendChild(div);
   });
+  // dynamic placement: flip to open-up if not enough space below
+  if (openHistoryMenuId) {
+    const openItem = historyList.querySelector(`.history-item[data-id="${openHistoryMenuId}"]`);
+    const openMenu = openItem ? openItem.querySelector('.history-menu') : null;
+    if (openItem && openMenu && !openMenu.hidden) {
+      const rect = openItem.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const need = 84;
+      if (spaceBelow < need + 12) openMenu.classList.add('open-up');
+      else openMenu.classList.remove('open-up');
+    }
+  }
 }
 
 async function loadConversations() {
@@ -303,6 +490,7 @@ async function send() {
     tracePath.classList.add('animate');
   }
   isStreaming = true;
+  closeHistoryMenu();
   sendBtn.disabled = true;
   ttftEl.textContent = '';
   addMessage('user', query);
@@ -393,6 +581,63 @@ async function send() {
   }
 }
 
+// History menu + rename + delete — global handlers
+document.addEventListener('click', (e) => {
+  const insideItem = e.target.closest('.history-item');
+  if (!insideItem) {
+    closeHistoryMenu();
+    if (renamingId) {
+      const input = historyList.querySelector(`[data-rename-input="${renamingId}"]`);
+      const raw = input ? input.value.trim() : '';
+      const orig = conversations.find(x => x.id === renamingId);
+      const origTitle = orig ? orig.title : '';
+      if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(renamingId);
+      else cancelHistoryRename();
+    }
+    return;
+  }
+  // click inside another item while renaming — treat as outside save
+  if (renamingId && insideItem.dataset.id !== renamingId) {
+    const input = historyList.querySelector(`[data-rename-input="${renamingId}"]`);
+    const raw = input ? input.value.trim() : '';
+    const orig = conversations.find(x => x.id === renamingId);
+    const origTitle = orig ? orig.title : '';
+    if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(renamingId);
+    else cancelHistoryRename();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (renamingId) { e.preventDefault(); cancelHistoryRename(); }
+  else if (openHistoryMenuId) { e.preventDefault(); closeHistoryMenu(); renderHistory(); }
+});
+if (historyDeleteCancel) historyDeleteCancel.addEventListener('click', () => {
+  pendingHistoryDeleteId = null;
+  if (historyDeleteModal && typeof historyDeleteModal.close === 'function') try { historyDeleteModal.close(); } catch {}
+  if (historyDeleteModal) historyDeleteModal.removeAttribute('open');
+});
+if (historyDeleteConfirm) historyDeleteConfirm.addEventListener('click', async (e) => {
+  e.preventDefault();
+  const id = pendingHistoryDeleteId;
+  if (!id) return;
+  if (historyDeleteModal && typeof historyDeleteModal.close === 'function') try { historyDeleteModal.close(); } catch {}
+  if (historyDeleteModal) historyDeleteModal.removeAttribute('open');
+  await deleteHistoryConversation(id);
+});
+if (historyDeleteModal) {
+  historyDeleteModal.addEventListener('click', (e) => {
+    if (e.target === historyDeleteModal) {
+      pendingHistoryDeleteId = null;
+      try { historyDeleteModal.close(); } catch {}
+      historyDeleteModal.removeAttribute('open');
+    }
+  });
+  historyDeleteModal.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    pendingHistoryDeleteId = null;
+    try { historyDeleteModal.close(); } catch {}
+  });
+}
 // Events
 input.addEventListener('input', autoResize);
 input.addEventListener('keydown', (e) => {
@@ -408,6 +653,8 @@ $('#newChat').addEventListener('click', async () => {
   clearThread();
   showEmpty(true);
   ttftEl.textContent = '';
+  closeHistoryMenu();
+  cancelHistoryRename();
   renderHistory();
   input.focus();
 });

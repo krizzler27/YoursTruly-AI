@@ -108,6 +108,17 @@
     </div>
   </main>
 
+  <dialog id="historyDeleteModal" class="history-delete-modal">
+    <form method="dialog" class="history-delete-modal-box">
+      <h3>Delete conversation?</h3>
+      <p style="font-size:13.5px; color:var(--muted-foreground); margin:0">This will permanently delete the conversation and all its messages. This cannot be undone.</p>
+      <div class="history-delete-modal-actions">
+        <button type="button" id="historyDeleteCancel" class="button ghost small mono">Cancel</button>
+        <button type="submit" id="historyDeleteConfirm" class="button small mono" value="confirm" style="background:var(--danger); border-color:var(--danger); color:white">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
   <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
   <script src="./app.js" type="module"></script>
 </body>

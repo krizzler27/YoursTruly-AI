@@ -43,6 +43,17 @@ class MessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ConversationUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=250, description="New conversation title")
+
+    @field_validator("title")
+    @classmethod
+    def check_title(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Title cannot be empty")
+        return v.strip()
+
+
 class ModelDownloadRequest(BaseModel):
     repo_id: str
     quant: Optional[str] = None

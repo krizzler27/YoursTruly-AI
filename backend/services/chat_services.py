@@ -1,7 +1,7 @@
+from sqlalchemy.orm import Session
 from typing import Optional, List
 import uuid
-
-from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 
 from db.models import ConversationsModel, MessagesModel
 from repository.chat_repository import ChatRepository
@@ -30,9 +30,27 @@ class ChatServices:
     def add_message(
         self, conversation_id: uuid.UUID, role: str, content: str
     ) -> MessagesModel:
-        return self.message_repo.create(
+        msg = self.message_repo.create(
             conversation_id=conversation_id, role=role, content=content
         )
+        self.chat_repo.update(conversation_id, updated_at=datetime.now(timezone.utc))
+        return msg
+
+    def rename_conversation(self, conversation_id: uuid.UUID, title: str) -> ConversationsModel:
+        """Rename conversation, storing full title up to 100 chars."""
+        clean = (title or "").strip()
+        if not clean:
+            raise ValueError("Title cannot be empty")
+        conv = self.chat_repo.update(conversation_id, title=clean)
+        if conv is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        return conv
+
+    def delete_conversation(self, conversation_id: uuid.UUID) -> None:
+        """Delete conversation and cascade messages; raises if not found."""
+        ok = self.chat_repo.delete(conversation_id)
+        if not ok:
+            raise ValueError(f"Conversation {conversation_id} not found")
 
     def get_history(self, conversation_id: uuid.UUID, limit: int = 5) -> List[dict]:
         """Return last `limit` messages as LLM-ready dicts."""
