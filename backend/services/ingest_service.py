@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from db.models import DocumentChunksModel, DocumentsModel
 from repository.lance_repository import LanceRepository
 from schemas.rag_schemas import Chunk
-from services.llama_service import EmbeddingEngine
+from services.llama_engine import EmbeddingEngine
 
 SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
 MAX_FILE_MB = 25

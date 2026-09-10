@@ -14,7 +14,7 @@ from db.models import DocumentsModel
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository
 from services.ingest_service import IngestService
-from services.llama_service import EmbeddingEngine
+from services.llama_engine import EmbeddingEngine
 
 
 class RagService:

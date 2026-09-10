@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from router import chat_api, llmfit_api, rag_api
 from db.models import Base
 from db.db_engine import engine
-from services.llama_service import LlamaEngine
+from services.llama_engine import LlamaEngine
 
 
 @asynccontextmanager

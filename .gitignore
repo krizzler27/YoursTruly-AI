@@ -31,3 +31,6 @@ notebooks/
 
 # Agent Memories and Instructions
 .agents/
+
+# RAG retrieval eval\
+backend/rag_eval/

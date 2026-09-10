@@ -7,7 +7,8 @@ import json
 import uuid
 
 from db.db_engine import get_db
-from services.llama_service import LlamaEngine
+from services.llama_engine import LlamaEngine
+from services.llm_service import LLMService
 from services.chat_services import ChatServices
 from schemas.api_schemas import ChatRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
 
@@ -30,6 +31,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         chat_service.add_message(conversation.id, "user", request.query)
 
         engine = LlamaEngine.get_instance()
+        llm = LLMService()
         if engine.is_generating():
             return JSONResponse(
                 status_code=429,
@@ -40,10 +42,10 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         if request.model and request.model.strip():
             engine.switch_model(request.model)
 
-        messages = LlamaEngine.build_chat_messages(history_prev, request.query)
+        messages = LLMService.build_chat_messages(history_prev, request.query)
 
         start_time = time.perf_counter()
-        stream = engine.astream_chat(messages=messages, request=http_request)
+        stream = llm.astream_chat(messages=messages, request=http_request)
 
         try:
             first_delta = await anext(stream)
@@ -108,8 +110,8 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
 @router.get('/conversations', response_model=List[ConversationResponse])
 def list_conversations(db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        rows = svc.list_conversations(limit=50)
+        llm = ChatServices(db)
+        rows = llm.list_conversations(limit=50)
         return rows
     except Exception as e:
         return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
@@ -118,8 +120,8 @@ def list_conversations(db: Session = Depends(get_db)):
 @router.get('/conversations/{conversation_id}/messages', response_model=List[MessageResponse])
 def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        rows = svc.list_messages(conversation_id, limit=100)
+        llm = ChatServices(db)
+        rows = llm.list_messages(conversation_id, limit=100)
         return rows
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
@@ -130,8 +132,8 @@ def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
 @router.patch('/conversations/{conversation_id}', response_model=ConversationResponse)
 def rename_conversation(conversation_id: uuid.UUID, req: ConversationUpdateRequest, db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        conv = svc.rename_conversation(conversation_id, req.title)
+        llm = ChatServices(db)
+        conv = llm.rename_conversation(conversation_id, req.title)
         return conv
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
@@ -142,8 +144,8 @@ def rename_conversation(conversation_id: uuid.UUID, req: ConversationUpdateReque
 @router.delete('/conversations/{conversation_id}')
 def delete_conversation(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        svc.delete_conversation(conversation_id)
+        llm = ChatServices(db)
+        llm.delete_conversation(conversation_id)
         return JSONResponse(content={"status": "deleted", "id": str(conversation_id)})
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})

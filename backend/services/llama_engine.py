@@ -1,11 +1,10 @@
-from threading import Thread, Lock
-from queue import Empty, Queue
-from fastapi import Request
 from pathlib import Path
-import asyncio
-import psutil
+from threading import Lock
+from typing import Dict, List, Optional
 import gc
 import os
+
+import psutil
 
 try:
     import llama_cpp
@@ -13,8 +12,6 @@ try:
 except ImportError as e:
     raise RuntimeError("llama-cpp-python not installed.") from e
 
-from typing import AsyncGenerator, Dict, List, Optional
-from services.prompt_manager import PromptManager
 from config import config
 
 
@@ -37,7 +34,7 @@ def get_default_ctx() -> int:
 
 
 class LlamaEngine:
-    """In-process llama.cpp engine with Vulkan fallback and thread-safe streaming."""
+    """In-process llama.cpp lifecycle — load, switch, health, tenure guards."""
 
     _instance: Optional["LlamaEngine"] = None
     _lock: Lock = Lock()
@@ -70,7 +67,11 @@ class LlamaEngine:
         p = Path(full_path.strip())
         if not p.exists() or not p.is_file() or p.suffix.lower() != ".gguf":
             raise FileNotFoundError(f"Model not found: {full_path}")
-        if self.model_path and Path(self.model_path).resolve() == p.resolve() and self.is_loaded():
+        if (
+            self.model_path
+            and Path(self.model_path).resolve() == p.resolve()
+            and self.is_loaded()
+        ):
             return
         self.unload()
         self.model_path = str(p)
@@ -94,14 +95,38 @@ class LlamaEngine:
         with self._gen_lock:
             self._generating = value
 
+    def acquire(self) -> None:
+        """Claim the engine or raise Busy."""
+        if self.is_generating():
+            raise RuntimeError("System Busy — model is generating. Try again.")
+        self._set_generating(True)
+
+    def release(self) -> None:
+        """Release a previous acquire."""
+        self._set_generating(False)
+
+    def ensure_loaded(self) -> None:
+        """Lazy load with a normalised error."""
+        if not self.is_loaded():
+            try:
+                self.load()
+            except FileNotFoundError as e:
+                raise RuntimeError(str(e)) from e
+
     def load(self) -> None:
         """Load most recent GGUF."""
         if self.is_loaded():
             return
         disc = self._discover_models()
-        mp = Path(self.model_path) if self.model_path and Path(self.model_path).exists() else (disc[0] if disc else None)
+        mp = (
+            Path(self.model_path)
+            if self.model_path and Path(self.model_path).exists()
+            else (disc[0] if disc else None)
+        )
         if mp is None or not mp.exists():
-            raise FileNotFoundError(f"No GGUF in {Path(config.LLAMA_MODEL_PATH)}. Download a model via Explore.")
+            raise FileNotFoundError(
+                f"No GGUF in {Path(config.LLAMA_MODEL_PATH)}. Download a model via Explore."
+            )
         self.model_path = str(mp)
 
         cores = config.LLAMA_N_THREADS or get_physical_cores()
@@ -130,11 +155,13 @@ class LlamaEngine:
             self.llm = Llama(n_gpu_layers=int(gpu_layers), **common_kwargs)
 
         try:
-            list(self.llm.create_chat_completion(
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=1,
-                stream=False,
-            ))
+            list(
+                self.llm.create_chat_completion(
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=1,
+                    stream=False,
+                )
+            )
         except Exception:
             pass
 
@@ -147,67 +174,14 @@ class LlamaEngine:
             self.llm = None
             gc.collect()
 
-    async def astream_chat(
-        self, messages: List[Dict[str, str]], request: Optional[Request] = None
-    ) -> AsyncGenerator[str, None]:
-        """Stream via worker thread + queue."""
-        if not self.is_loaded():
-            # lazy load on first chat if lifespan not warmed
-            try:
-                self.load()
-            except FileNotFoundError as e:
-                raise RuntimeError(str(e)) from e
-
-        if self.is_generating():
-            raise RuntimeError("System Busy — model is generating. Try again.")
-
-        self._set_generating(True)
-        token_queue: Queue = Queue()
-        stop_signal = object()
-
-        def worker() -> None:
-            try:
-                # sleep-wake safety: catch OS interrupt
-                stream = self.llm.create_chat_completion(messages=messages, stream=True, temperature=0.6)
-                for chunk in stream:
-                    try:
-                        delta = chunk["choices"][0]["delta"].get("content", "")
-                    except Exception:
-                        delta = ""
-                    if delta:
-                        token_queue.put(delta)
-            except Exception as e:
-                token_queue.put(e)
-            finally:
-                token_queue.put(stop_signal)
-
-        Thread(target=worker, daemon=True).start()
-
-        try:
-            while True:
-                if request is not None:
-                    try:
-                        if await request.is_disconnected():
-                            break
-                    except Exception:
-                        pass
-                try:
-                    item = token_queue.get_nowait()
-                except Empty:
-                    await asyncio.sleep(0.005)
-                    continue
-                if item is stop_signal:
-                    break
-                if isinstance(item, Exception):
-                    raise item
-                yield item
-        finally:
-            self._set_generating(False)
-
     def health(self) -> Dict[str, object]:
         disc = self._discover_models()
         if disc:
-            mp = Path(self.model_path) if self.model_path and Path(self.model_path).exists() else disc[0]
+            mp = (
+                Path(self.model_path)
+                if self.model_path and Path(self.model_path).exists()
+                else disc[0]
+            )
             status = "ready"
             exists = True
         else:
@@ -223,29 +197,6 @@ class LlamaEngine:
             "generating": self.is_generating(),
             "available": [p.name for p in disc],
         }
-
-    @classmethod
-    def build_chat_messages(cls, history: List[Dict[str, str]], current_query: str) -> List[Dict[str, str]]:
-        if not history:
-            history_block = "No prior conversation."
-        else:
-            lines = []
-            for m in history:
-                role = "User" if m.get("role") == "user" else "Assistant"
-                lines.append(f"{role}: {m.get('content', '')}")
-            history_block = "\n".join(lines)
-        system_content = PromptManager.render(
-            "chat_instruction.j2",
-            history_block=history_block,
-            current_query=current_query,
-        )
-        return [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": current_query},
-        ]
-
-
-# ======================= Embedding (RAG) =======================
 
 
 class EmbeddingEngine(LlamaEngine):
@@ -283,7 +234,6 @@ class EmbeddingEngine(LlamaEngine):
         if self.is_loaded():
             return
         mp = self._resolve_model()
-
 
         cores = config.LLAMA_N_THREADS or get_physical_cores()
         self.llm = Llama(
