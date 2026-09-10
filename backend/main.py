@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from fastapi import FastAPI, status
 from fastapi.staticfiles import StaticFiles
 
-from router import chat_api, llmfit_api
+from router import chat_api, llmfit_api, rag_api
 from db.models import Base
 from db.db_engine import engine
 from services.llama_service import LlamaEngine
@@ -46,6 +46,7 @@ app.add_middleware(
 
 app.include_router(chat_api.router)
 app.include_router(llmfit_api.router)
+app.include_router(rag_api.router)
 
 @app.get("/api/health", status_code=status.HTTP_200_OK)
 async def health() -> JSONResponse:
