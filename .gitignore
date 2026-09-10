@@ -20,6 +20,7 @@ Thumbs.db
 .mypy_cache/
 
 # Notebooks (local experiments)
+notebooks/
 *.ipynb
 .devplans
 

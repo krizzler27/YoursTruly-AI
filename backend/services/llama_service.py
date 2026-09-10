@@ -7,6 +7,12 @@ import psutil
 import gc
 import os
 
+try:
+    import llama_cpp
+    from llama_cpp import Llama
+except ImportError as e:
+    raise RuntimeError("llama-cpp-python not installed.") from e
+
 from typing import AsyncGenerator, Dict, List, Optional
 from services.prompt_manager import PromptManager
 from config import config
@@ -97,11 +103,6 @@ class LlamaEngine:
         if mp is None or not mp.exists():
             raise FileNotFoundError(f"No GGUF in {Path(config.LLAMA_MODEL_PATH)}. Download a model via Explore.")
         self.model_path = str(mp)
-        try:
-            import llama_cpp
-            from llama_cpp import Llama
-        except ImportError as e:
-            raise RuntimeError("llama-cpp-python not installed.") from e
 
         cores = config.LLAMA_N_THREADS or get_physical_cores()
         ctx = get_default_ctx()
@@ -242,3 +243,78 @@ class LlamaEngine:
             {"role": "system", "content": system_content},
             {"role": "user", "content": current_query},
         ]
+
+
+# ======================= Embedding (RAG) =======================
+
+
+class EmbeddingEngine(LlamaEngine):
+    """nomic-embed-text engine — embedding only, inherits engine lifecycle."""
+
+    _instance: Optional["EmbeddingEngine"] = None
+    _lock: Lock = Lock()
+
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        embed_ctx: int = 2048,
+        batch_size: int = 16,
+    ):
+        super().__init__(model_path=model_path)
+        self.embed_ctx = embed_ctx
+        self.batch_size = batch_size
+
+    def _resolve_model(self) -> Path:
+        """nomic GGUF path: explicit model_path, else the *nomic*.gguf match."""
+        if self.model_path and Path(self.model_path).exists():
+            return Path(self.model_path)
+        hits = [
+            p for p in Path(config.LLAMA_MODEL_PATH).glob("*nomic*.gguf") if p.is_file()
+        ]
+        if not hits:
+            raise FileNotFoundError(
+                f"No nomic-embed-text GGUF in {config.LLAMA_MODEL_PATH}. "
+                "Download e.g. nomic-ai/nomic-embed-text-v1.5-GGUF Q4_K_M."
+            )
+        return sorted(hits, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
+    def load(self) -> None:
+        """Load nomic GGUF with embedding=True, clipped ctx, no GPU/warm-up."""
+        if self.is_loaded():
+            return
+        mp = self._resolve_model()
+
+
+        cores = config.LLAMA_N_THREADS or get_physical_cores()
+        self.llm = Llama(
+            model_path=str(mp),
+            embedding=True,
+            n_ctx=min(get_default_ctx(), self.embed_ctx),
+            n_threads=cores,
+            n_threads_batch=cores,
+            n_batch=512,
+            n_ubatch=256,
+            use_mmap=True,
+            use_mlock=False,
+            verbose=False,
+        )
+        self.model_path = str(mp)
+
+    def embed(
+        self,
+        texts: List[str],
+        batch_size: Optional[int] = None,
+    ) -> List[List[float]]:
+        """Embed texts (normalized)."""
+
+        if not self.is_loaded():
+            self.load()
+
+        batch_size = batch_size or self.batch_size
+        vectors: List[List[float]] = []
+
+        for i in range(0, len(texts), batch_size):
+            out = self.llm.embed(texts[i : i + batch_size], normalize=True)
+            for vec in out:
+                vectors.append(list(vec))
+        return vectors
