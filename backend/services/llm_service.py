@@ -55,7 +55,11 @@ class LLMService:
         ]
 
     async def astream_chat(
-        self, messages: List[Dict[str, str]], request: Optional[Request] = None
+        self,
+        messages: List[Dict[str, str]],
+        request: Optional[Request] = None,
+        repeat_penalty: float = 1.0,
+        temperature: float = 0.6,
     ):
         """Stream via worker thread + queue."""
         self.engine.ensure_loaded()
@@ -69,7 +73,7 @@ class LLMService:
             try:
                 # sleep-wake safety: catch OS interrupt
                 stream = handle.create_chat_completion(
-                    messages=messages, stream=True, temperature=0.6
+                    messages=messages, stream=True, temperature=temperature, repeat_penalty=repeat_penalty
                 )
                 for chunk in stream:
                     try:
@@ -110,9 +114,10 @@ class LLMService:
         self,
         messages: List[Dict[str, str]],
         max_tokens: int = 512,
-        temperature: float = 0.0,
+        temperature: float = 0.6,
         stop: Optional[List[str]] = None,
         structured_output: Optional[Type[T]] = None,
+        repeat_penalty: float = 1.0,
     ) -> Union[str, T]:
         """Blocking single call — plain str, or validated model instance."""
         self.engine.ensure_loaded()
@@ -125,6 +130,7 @@ class LLMService:
                     max_tokens=max_tokens,
                     temperature=temperature,
                     stop=stop or [],
+                    repeat_penalty=repeat_penalty,
                 )
                 return _content_from_response(resp)
 
@@ -135,6 +141,7 @@ class LLMService:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 stop=stop or [],
+                repeat_penalty=repeat_penalty,
                 response_format={"type": "json_object", "schema": schema},
                 grammar=_grammar_for(structured_output),
             )
@@ -152,13 +159,14 @@ class LLMService:
         self,
         messages: List[Dict[str, str]],
         max_tokens: int = 512,
-        temperature: float = 0.0,
+        temperature: float = 0.6,
         stop: Optional[List[str]] = None,
         structured_output: Optional[Type[T]] = None,
+        repeat_penalty: float = 1.0,
     ) -> Union[str, T]:
         """Async wrapper over invoke for graph and API callers."""
         return await asyncio.to_thread(
-            self.invoke, messages, max_tokens, temperature, stop, structured_output
+            self.invoke, messages, max_tokens, temperature, stop, structured_output, repeat_penalty
         )
 
 

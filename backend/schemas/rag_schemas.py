@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -30,6 +30,7 @@ class SearchRequest(BaseModel):
 
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
+    conversation_id: Optional[uuid.UUID] = None
 
     @field_validator("query")
     @classmethod
@@ -63,7 +64,16 @@ class DocumentResponse(BaseModel):
     filename: str
     chunk_count: int = 0
     status: str = "pending"
+    conversation_id: Optional[uuid.UUID] = None
+    summary: str = ""
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RouteDecision(BaseModel):
+    """Agentic entry decision — DIRECT answers from chat, RAG via local docs (WEB later)."""
+
+    route: Literal["DIRECT", "RAG"]
+    reason: str = ""

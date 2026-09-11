@@ -1,6 +1,7 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-from sqlalchemy import func, ForeignKey
+from sqlalchemy import func, ForeignKey, UniqueConstraint
 from datetime import datetime, timezone
+from typing import Optional
 import uuid
 import uuid6
 
@@ -47,9 +48,17 @@ class DocumentsModel(Base, TimestampMixin):
         primary_key=True,
         default=uuid6.uuid7
     )
-    filename: Mapped[str] = mapped_column(unique=True, index=True)
+    filename: Mapped[str] = mapped_column(index=True)
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    summary: Mapped[str] = mapped_column(default="")
     chunk_count: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(default="pending")  # pending|indexed
+
+    __table_args__ = (
+        UniqueConstraint("filename", "conversation_id"),
+    )
 
 
 class DocumentChunksModel(Base):

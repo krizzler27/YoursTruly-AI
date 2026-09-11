@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from db.models import ConversationsModel, MessagesModel
 from repository.chat_repository import ChatRepository
 from repository.message_repository import MessageRepository
+from repository.lance_repository import LanceRepository
+from services.decider import Decider
+from services.llama_engine import EmbeddingEngine
+from services.llm_service import LLMService
+from services.rag_service import RagService
 
 class ChatServices:
     """Orchestrates conversation + message persistence for chat/stream."""
@@ -47,7 +52,13 @@ class ChatServices:
         return conv
 
     def delete_conversation(self, conversation_id: uuid.UUID) -> None:
-        """Delete conversation and cascade messages; raises if not found."""
+        """Delete conversation, its messages (cascade) and its attached docs."""
+        rag = RagService(self.db)
+        for doc in rag.docs.list_by_conversation(conversation_id, limit=1000):
+            try:
+                rag.delete_document(doc.id)
+            except ValueError:
+                pass  # already gone
         ok = self.chat_repo.delete(conversation_id)
         if not ok:
             raise ValueError(f"Conversation {conversation_id} not found")
@@ -66,3 +77,39 @@ class ChatServices:
         if not self.chat_repo.get_by_id(conversation_id):
             raise ValueError(f"Conversation {conversation_id} not found")
         return rows
+
+    def prepare_messages(
+        self,
+        query: str,
+        history: List[dict],
+        conversation_id: uuid.UUID,
+        llm: LLMService,
+    ) -> tuple[List[dict], str]:
+        """Decide DIRECT vs RAG and build the message list; fail-open DIRECT."""
+        try:
+            decision = Decider(self.db, llm=llm).decide(query, conversation_id).route
+        except Exception as e:
+            print(f"[RAG] decider failed, DIRECT: {e}")
+            return LLMService.build_chat_messages(history or [], query), "DIRECT"
+
+        if decision != "RAG":
+            return LLMService.build_chat_messages(history or [], query), "DIRECT"
+
+        try:
+            return self.retrieve_grounded(query, history, conversation_id), "RAG"
+        except Exception as e:
+            print(f"[RAG] retrieval failed, DIRECT: {e}")
+            return LLMService.build_chat_messages(history or [], query), "DIRECT"
+
+    def retrieve_grounded(
+        self, query: str, history: List[dict], conversation_id: uuid.UUID, top_k: int = 5
+    ) -> List[dict]:
+        """Embed one query, scoped search, budgeted ground; embedder unloaded after."""
+        embedder = EmbeddingEngine()
+        try:
+            embedder.load()  # brief co-residency with chat; unloaded in finally
+            rag = RagService(self.db, engine=embedder, lance=LanceRepository(self.db))
+            hits = rag.search(query, top_k=top_k, conversation_id=conversation_id)
+            return rag.build_messages(query, hits, history or [])
+        finally:
+            embedder.unload()

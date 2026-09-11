@@ -60,17 +60,23 @@ class LanceRepository:
     # ---- write path ----
 
     def upsert_chunks(
-        self, document_id: UUID, chunks: List[Chunk], commit: bool = True
+        self,
+        document_id: UUID,
+        chunks: List[Chunk],
+        commit: bool = True,
+        conversation_id: Optional[UUID] = None,
     ) -> None:
         """Replace a document's vectors + fts index (safe to re-run)."""
         self.delete_document(document_id, commit=False)
 
         did = str(document_id)
+        cid = str(conversation_id) if conversation_id is not None else None
 
         rows = [
             {
                 "id": f"{did}:{c.index}",
                 "document_id": did,
+                "conversation_id": cid,
                 "index": c.index,
                 "text": c.text,
                 "vector": c.vector,
@@ -126,7 +132,12 @@ class LanceRepository:
 
     # ---- read path (hybrid retrieval) ----
 
-    def vector_search(self, query_vector: List[float], limit: int = 20) -> List[str]:
+    def vector_search(
+        self,
+        query_vector: List[float],
+        limit: int = 20,
+        conversation_id: Optional[UUID] = None,
+    ) -> List[str]:
         """Vector top-K ids by L2 (unit-norm vectors rank as cosine)."""
         if not query_vector:
             return []
@@ -136,16 +147,27 @@ class LanceRepository:
         if table is None:
             return []
 
-        rows = table.search(query_vector).limit(limit).to_list()
+        query = table.search(query_vector)
+
+        if conversation_id is not None:
+            # UUID charset is filter-safe; prefilter keeps ranking scoped.
+            query = query.where(f"conversation_id = '{conversation_id}'")
+
+        rows = query.limit(limit).to_list()
 
         return [r["id"] for r in rows if "id" in r]
 
-    def fts_search(self, query: str, limit: int = 20) -> List[str]:
+    def fts_search(
+        self, query: str, limit: int = 20, doc_ids: Optional[List[str]] = None
+    ) -> List[str]:
         """BM25 top-K ids over chunk text (OR of word tokens)."""
         tokens = re.findall(r"\w+", query or "", flags=re.UNICODE)
 
         if not tokens:
             return []
+
+        if doc_ids is not None and not doc_ids:
+            return []  # scoped chat with nothing indexed: no query needed
 
         exists = self.db.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"),
@@ -156,13 +178,21 @@ class LanceRepository:
             return []
 
         match = " OR ".join(tokens)
+        params: Dict[str, object] = {"q": match, "n": limit}
+        scope = ""
+
+        if doc_ids is not None:
+            # Per-chat scoping without touching the FTS schema (dev: no migration).
+            placeholders = ",".join(f":d{i}" for i in range(len(doc_ids)))
+            scope = f" AND document_id IN ({placeholders})"
+            params.update({f"d{i}": did for i, did in enumerate(doc_ids)})
 
         rows = self.db.execute(
             text(
-                f"SELECT id FROM {FTS_TABLE} WHERE {FTS_TABLE} MATCH :q "
+                f"SELECT id FROM {FTS_TABLE} WHERE {FTS_TABLE} MATCH :q{scope} "
                 f"ORDER BY bm25({FTS_TABLE}) LIMIT :n"
             ),
-            {"q": match, "n": limit},
+            params,
         ).all()
 
         return [r[0] for r in rows]
@@ -189,13 +219,15 @@ class LanceRepository:
         top_k: int = 5,
         candidate_k: Optional[int] = None,
         rrf_k: Optional[int] = None,
+        conversation_id: Optional[UUID] = None,
+        doc_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Vector + BM25 candidates fused by RRF, hydrated from sqlite."""
         depth = candidate_k or self.candidate_k
         fusion_k = rrf_k if rrf_k is not None else self.rrf_k
 
-        vector_ids = self.vector_search(query_vector, limit=depth)
-        fts_ids = self.fts_search(query_text, limit=depth)
+        vector_ids = self.vector_search(query_vector, limit=depth, conversation_id=conversation_id)
+        fts_ids = self.fts_search(query_text, limit=depth, doc_ids=doc_ids)
 
         if not vector_ids and not fts_ids:
             return []

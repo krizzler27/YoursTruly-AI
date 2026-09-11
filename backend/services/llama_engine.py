@@ -242,8 +242,10 @@ class EmbeddingEngine(LlamaEngine):
             n_ctx=min(get_default_ctx(), self.embed_ctx),
             n_threads=cores,
             n_threads_batch=cores,
-            n_batch=512,
-            n_ubatch=256,
+            # Encoder packs up to n_batch tokens per native call, which asserts
+            # they fit n_ubatch: keep both at ctx so real-size chunks can't abort.
+            n_batch=2048,
+            n_ubatch=2048,
             use_mmap=True,
             use_mlock=False,
             verbose=False,

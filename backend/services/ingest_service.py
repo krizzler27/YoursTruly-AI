@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import List, Optional
 
+import uuid
 import uuid6
 from langchain_core.documents import Document
 from langchain_text_splitters import (
@@ -11,6 +12,7 @@ from langchain_text_splitters import (
 )
 from sqlalchemy.orm import Session
 
+from config import config
 from db.models import DocumentChunksModel, DocumentsModel
 from repository.lance_repository import LanceRepository
 from schemas.rag_schemas import Chunk
@@ -18,6 +20,14 @@ from services.llama_engine import EmbeddingEngine
 
 SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
 MAX_FILE_MB = 25
+
+
+def stored_upload_path(conversation_id: uuid.UUID, filename: str) -> Path:
+    """App-owned copy location: <models-dir>/../docs/<chat>/<file>."""
+    safe = Path(filename).name.strip()
+    target = Path(config.LLAMA_MODEL_PATH).parent / "docs" / str(conversation_id)
+    target.mkdir(parents=True, exist_ok=True)
+    return target / safe
 
 MARKDOWN_HEADERS = [("#", "H1"), ("##", "H2"), ("###", "H3"), ("####", "H4")]
 SPLIT_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
@@ -143,8 +153,10 @@ class IngestService:
 
     # ---- ingest ----
 
-    def ingest(self, source_path: str, filename: str) -> DocumentsModel:
-        """Index one txt/md/pdf file. Re-ingesting a filename replaces it.
+    def ingest(
+        self, source_path: str, filename: str, conversation_id=None
+    ) -> DocumentsModel:
+        """Index one txt/md/pdf file into one chat. Re-ingesting a filename replaces it.
 
         Insert-new-first under a temp filename, single commit for all
         sqlite writes; old vectors drop after the commit (LanceDB can't
@@ -158,7 +170,10 @@ class IngestService:
 
         existing = (
             self.db.query(DocumentsModel)
-            .filter(DocumentsModel.filename == filename)
+            .filter(
+                DocumentsModel.filename == filename,
+                DocumentsModel.conversation_id == conversation_id,
+            )
             .first()
         )
         old_id = existing.id if existing is not None else None
@@ -167,12 +182,13 @@ class IngestService:
             filename=f"__pending__{uuid6.uuid7().hex}",
             chunk_count=len(chunked),
             status="indexed",
+            conversation_id=conversation_id,
         )
         self.db.add(doc)
         self.db.flush()
 
         try:
-            self.lance.upsert_chunks(doc.id, chunked, commit=False)
+            self.lance.upsert_chunks(doc.id, chunked, commit=False, conversation_id=conversation_id)
             self.db.add_all(
                 [
                     DocumentChunksModel(

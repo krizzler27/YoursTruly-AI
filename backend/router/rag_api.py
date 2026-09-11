@@ -1,16 +1,15 @@
 import shutil
-import tempfile
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from db.db_engine import get_db
 from schemas.rag_schemas import DocumentResponse, SearchHit, SearchRequest
-from services.ingest_service import SUPPORTED_SUFFIXES
+from services.ingest_service import SUPPORTED_SUFFIXES, stored_upload_path
 from services.rag_service import RagService
 
 router = APIRouter(prefix="/api", tags=["RAG"])
@@ -22,7 +21,7 @@ def search(req: SearchRequest, db: Session = Depends(get_db)):
     try:
         svc = RagService(db)
 
-        return svc.search(req.query, top_k=req.top_k)
+        return svc.search(req.query, top_k=req.top_k, conversation_id=req.conversation_id)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": str(e)})
     except FileNotFoundError as e:
@@ -34,9 +33,13 @@ def search(req: SearchRequest, db: Session = Depends(get_db)):
         )
 
 
-@router.post("/ingest", response_model=DocumentResponse)
-def ingest(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Upload txt/md/pdf — sync def runs in threadpool, ingest blocks."""
+@router.post("/ingest", response_model=DocumentResponse, status_code=status.HTTP_202_ACCEPTED)
+def ingest(
+    file: UploadFile = File(...),
+    conversation_id: uuid.UUID = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Accept txt/md/pdf for one chat; chunk/embed/summary run in background."""
     raw_name = file.filename or ""
 
     filename = Path(raw_name).name.strip()
@@ -54,39 +57,62 @@ def ingest(file: UploadFile = File(...), db: Session = Depends(get_db)):
     tmp_path: str | None = None
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp_path = tmp.name
+        tmp_path = str(stored_upload_path(conversation_id, filename))
 
         with open(tmp_path, "wb") as out:
             shutil.copyfileobj(file.file, out)
-
-        svc = RagService(db)
-
-        return svc.ingest_file(tmp_path, filename)
-    except ValueError as e:
-        return JSONResponse(status_code=400, content={"detail": str(e)})
-    except FileNotFoundError as e:
-        return JSONResponse(status_code=500, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
-        )
-    finally:
         if tmp_path:
             try:
                 Path(tmp_path).unlink(missing_ok=True)
             except Exception:
                 pass
+        return JSONResponse(
+            status_code=500,
+            content={"Exception occured": str(e), "type": type(e).__name__},
+        )
 
-
-@router.get("/documents", response_model=List[DocumentResponse])
-def list_documents(db: Session = Depends(get_db)):
-    """List ingested files newest first."""
     try:
         svc = RagService(db)
 
-        return svc.list_documents(limit=100)
+        doc = svc.submit_ingest(tmp_path, filename, conversation_id)
+
+        return JSONResponse(
+            status_code=202,
+            content=DocumentResponse.model_validate(doc).model_dump(mode="json"),
+        )
+    except ValueError as e:
+        Path(tmp_path).unlink(missing_ok=True)
+        msg = str(e)
+        if "not found" in msg:
+            return JSONResponse(status_code=404, content={"detail": msg})
+        return JSONResponse(status_code=400, content={"detail": msg})
+    except RuntimeError as e:
+        Path(tmp_path).unlink(missing_ok=True)
+        msg = str(e)
+        if "already running" in msg:
+            return JSONResponse(status_code=409, content={"detail": msg})
+        return JSONResponse(status_code=500, content={"detail": msg})
+    except Exception as e:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        return JSONResponse(
+            status_code=500,
+            content={"Exception occured": str(e), "type": type(e).__name__},
+        )
+
+
+@router.get("/documents", response_model=List[DocumentResponse])
+def list_documents(
+    db: Session = Depends(get_db), conversation_id: Optional[uuid.UUID] = None
+):
+    """List ingested files newest first, optionally one chat's."""
+    try:
+        svc = RagService(db)
+
+        return svc.list_documents(limit=100, conversation_id=conversation_id)
     except Exception as e:
         return JSONResponse(
             status_code=500,

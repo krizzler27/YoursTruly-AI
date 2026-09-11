@@ -20,3 +20,15 @@ class DocumentRepository(BaseRepository[DocumentsModel]):
             .limit(limit)
             .all()
         )
+
+    def list_by_conversation(
+        self, conversation_id, limit: int = 100
+    ) -> List[DocumentsModel]:
+        """List one chat's attached files newest first."""
+        return (
+            self.db.query(self.model)
+            .filter(self.model.conversation_id == conversation_id)
+            .order_by(self.model.created_at.desc(), self.model.id.desc())
+            .limit(limit)
+            .all()
+        )

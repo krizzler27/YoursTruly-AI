@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
+import asyncio
 import time
 import json
 import uuid
@@ -42,10 +43,17 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         if request.model and request.model.strip():
             engine.switch_model(request.model)
 
-        messages = LLMService.build_chat_messages(history_prev, request.query)
+        start_time = time.perf_counter()  # TTFT covers RAG dispatch
+        messages, route = await asyncio.to_thread(
+            chat_service.prepare_messages, request.query, history_prev, conversation.id, llm
+        )
 
-        start_time = time.perf_counter()
-        stream = llm.astream_chat(messages=messages, request=http_request)
+        stream = llm.astream_chat(
+            messages=messages,
+            request=http_request,
+            temperature=0.5 if route == "RAG" else 0.6,
+            repeat_penalty=1.1,  # chat generation: loops/echoes cost more than paraphrase risk
+        )
 
         try:
             first_delta = await anext(stream)
@@ -96,6 +104,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
             headers={
                 "X-TTFT": f"{ttft_ms:.2f}",
                 "X-Conversation-Id": str(conversation.id),
+                "X-Route": route,
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no"
             }
