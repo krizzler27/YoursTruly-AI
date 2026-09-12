@@ -41,7 +41,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Conversation-Id", "X-TTFT"],
+    expose_headers=["X-Conversation-Id", "X-TTFT", "X-Route"],
 )
 
 app.include_router(chat_api.router)

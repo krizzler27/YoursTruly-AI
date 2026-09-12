@@ -29,6 +29,14 @@ def stored_upload_path(conversation_id: uuid.UUID, filename: str) -> Path:
     target.mkdir(parents=True, exist_ok=True)
     return target / safe
 
+
+def staged_upload_path(conversation_id: uuid.UUID, filename: str) -> Path:
+    """Unique temp upload; moved to the canonical copy only on success."""
+    safe = Path(filename).name.strip()
+    target = Path(config.LLAMA_MODEL_PATH).parent / "docs" / str(conversation_id)
+    target.mkdir(parents=True, exist_ok=True)
+    return target / f"__incoming__{uuid6.uuid7().hex}_{safe}"
+
 MARKDOWN_HEADERS = [("#", "H1"), ("##", "H2"), ("###", "H3"), ("####", "H4")]
 SPLIT_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 

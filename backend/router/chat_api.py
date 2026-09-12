@@ -11,7 +11,7 @@ from db.db_engine import get_db
 from services.llama_engine import LlamaEngine
 from services.llm_service import LLMService
 from services.chat_services import ChatServices
-from schemas.api_schemas import ChatRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
+from schemas.api_schemas import ChatRequest, ConversationCreateRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -20,6 +20,13 @@ router = APIRouter(prefix="/api", tags=["Chat"])
 async def chat(request: ChatRequest, http_request: Request, db: Session = Depends(get_db)):
 
     try:
+        engine = LlamaEngine.get_instance()
+        if engine.is_generating():
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "System Busy — model is generating. Try again."},
+            )
+
         chat_service = ChatServices(db)
         try:
             conversation = chat_service.ensure_conversation(
@@ -31,22 +38,16 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         history_prev = chat_service.get_history(conversation.id, limit=5)
         chat_service.add_message(conversation.id, "user", request.query)
 
-        engine = LlamaEngine.get_instance()
         llm = LLMService()
-        if engine.is_generating():
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "System Busy — model is generating. Try again."},
-                headers={"X-Conversation-Id": str(conversation.id)},
-            )
 
         if request.model and request.model.strip():
             engine.switch_model(request.model)
 
-        start_time = time.perf_counter()  # TTFT covers RAG dispatch
-        messages, route = await asyncio.to_thread(
-            chat_service.prepare_messages, request.query, history_prev, conversation.id, llm
+        start_time = time.perf_counter()  # TTFT covers agent dispatch
+        outcome = await asyncio.to_thread(
+            chat_service.run_agentic, request.query, history_prev, conversation.id
         )
+        messages, route, stages = outcome["messages"], outcome["route"], outcome.get("stages", [])
 
         stream = llm.astream_chat(
             messages=messages,
@@ -81,6 +82,9 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
             acc_parts.append(first_delta)
 
         async def sse_wrap():
+            for stage in stages:
+                yield f"event: stage\ndata: {json.dumps({'stage': stage})}\n\n"
+
             if first_delta:
                 yield f"data: {json.dumps({'content': first_delta})}\n\n"
 
@@ -110,6 +114,17 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
             }
         )
 
+    except Exception as e:
+        return JSONResponse(
+            status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}
+        )
+
+
+@router.post('/conversations', response_model=ConversationResponse, status_code=201)
+def create_conversation(req: ConversationCreateRequest, db: Session = Depends(get_db)):
+    """Create an empty chat shell (e.g. so files can attach before the first message)."""
+    try:
+        return ChatServices(db).ensure_conversation(None, title=req.title)
     except Exception as e:
         return JSONResponse(
             status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}

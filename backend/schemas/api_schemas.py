@@ -43,6 +43,18 @@ class MessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ConversationCreateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=250, description="Optional chat title")
+
+    @field_validator("title")
+    @classmethod
+    def check_title(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
+
+
 class ConversationUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=250, description="New conversation title")
 

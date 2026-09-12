@@ -58,7 +58,7 @@ class Decider:
             {
                 "role": "system",
                 "content": PromptManager.render(
-                    "rag_gate.j2", current_query=clean, attached_docs=inventory
+                    "rag_gate.j2", attached_docs=inventory
                 ),
             },
             {"role": "user", "content": clean},
@@ -72,5 +72,23 @@ class Decider:
             )
             assert isinstance(result, RouteDecision)
             return result
-        except RuntimeError:
-            return RouteDecision(route="RAG", reason="decider fallback")
+        except RuntimeError as e:
+            # Grammar-constrained SLMs often emit the right word in the
+            # wrong envelope; recover it from the raw output if present.
+            recovered = _recover_route(str(e))
+            if recovered is not None:
+                return RouteDecision(route=recovered, reason="recovered")
+            return RouteDecision(route="DIRECT", reason="decider fallback")
+        except Exception:
+            return RouteDecision(route="DIRECT", reason="decider fallback")
+
+
+def _recover_route(error: str) -> Optional[str]:
+    """Last DIRECT|RAG token in the raw model output, if any."""
+    import re
+
+    raw = error.split("raw:", 1)[-1]
+    found = re.findall(r"\b(DIRECT|RAG)\b", raw, flags=re.IGNORECASE)
+    if not found:
+        return None
+    return found[-1].upper()

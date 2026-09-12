@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from db.db_engine import get_db
 from schemas.rag_schemas import DocumentResponse, SearchHit, SearchRequest
-from services.ingest_service import SUPPORTED_SUFFIXES, stored_upload_path
+from services.ingest_queue import queue_depth, submit_ingest
+from services.ingest_service import SUPPORTED_SUFFIXES, staged_upload_path
 from services.rag_service import RagService
 
 router = APIRouter(prefix="/api", tags=["RAG"])
@@ -39,7 +40,7 @@ def ingest(
     conversation_id: uuid.UUID = Form(...),
     db: Session = Depends(get_db),
 ):
-    """Accept txt/md/pdf for one chat; chunk/embed/summary run in background."""
+    """Accept txt/md/pdf for one chat; queued, indexed in background FIFO."""
     raw_name = file.filename or ""
 
     filename = Path(raw_name).name.strip()
@@ -54,32 +55,28 @@ def ingest(
             status_code=400, content={"detail": f"unsupported file type: {suffix}"}
         )
 
-    tmp_path: str | None = None
+    # Temp copy: the canonical file is replaced only after a good index.
+    tmp_path = str(staged_upload_path(conversation_id, filename))
 
     try:
-        tmp_path = str(stored_upload_path(conversation_id, filename))
-
         with open(tmp_path, "wb") as out:
             shutil.copyfileobj(file.file, out)
     except Exception as e:
-        if tmp_path:
-            try:
-                Path(tmp_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+        Path(tmp_path).unlink(missing_ok=True)
         return JSONResponse(
             status_code=500,
             content={"Exception occured": str(e), "type": type(e).__name__},
         )
 
     try:
-        svc = RagService(db)
-
-        doc = svc.submit_ingest(tmp_path, filename, conversation_id)
+        doc = submit_ingest(db, tmp_path, filename, conversation_id)
 
         return JSONResponse(
             status_code=202,
-            content=DocumentResponse.model_validate(doc).model_dump(mode="json"),
+            content={
+                **DocumentResponse.model_validate(doc).model_dump(mode="json"),
+                "queue_depth": queue_depth(),
+            },
         )
     except ValueError as e:
         Path(tmp_path).unlink(missing_ok=True)
@@ -87,17 +84,8 @@ def ingest(
         if "not found" in msg:
             return JSONResponse(status_code=404, content={"detail": msg})
         return JSONResponse(status_code=400, content={"detail": msg})
-    except RuntimeError as e:
-        Path(tmp_path).unlink(missing_ok=True)
-        msg = str(e)
-        if "already running" in msg:
-            return JSONResponse(status_code=409, content={"detail": msg})
-        return JSONResponse(status_code=500, content={"detail": msg})
     except Exception as e:
-        try:
-            Path(tmp_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        Path(tmp_path).unlink(missing_ok=True)
         return JSONResponse(
             status_code=500,
             content={"Exception occured": str(e), "type": type(e).__name__},

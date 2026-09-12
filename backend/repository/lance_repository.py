@@ -21,6 +21,20 @@ from schemas.rag_schemas import Chunk
 FTS_TABLE = "document_chunks_fts"
 
 
+def sid(value: object) -> str:
+    """Canonical string id for LanceDB/FTS/chunk keys: dashed UUID form.
+
+    SQLite UUID columns store dashless hex via SQLAlchemy; every free-text
+    store must use this helper so ids compare equal across stores.
+    """
+    return str(value)
+
+
+def chunk_id(document_id: object, index: int) -> str:
+    """Chunk PK shared by LanceDB rows, FTS rows, and SQLite chunks."""
+    return f"{sid(document_id)}:{index}"
+
+
 def ensure_fts_table(db: Session) -> None:
     """Create the FTS5 index once; later calls are a read-only no-op."""
 
@@ -69,12 +83,12 @@ class LanceRepository:
         """Replace a document's vectors + fts index (safe to re-run)."""
         self.delete_document(document_id, commit=False)
 
-        did = str(document_id)
-        cid = str(conversation_id) if conversation_id is not None else None
+        did = sid(document_id)
+        cid = sid(conversation_id) if conversation_id is not None else None
 
         rows = [
             {
-                "id": f"{did}:{c.index}",
+                "id": chunk_id(did, c.index),
                 "document_id": did,
                 "conversation_id": cid,
                 "index": c.index,
@@ -90,10 +104,12 @@ class LanceRepository:
             table = self._table()
 
             if table is None:
-                # first-ever table: schema inferred from the first real row
-                self.conn.create_table("chunks", data=[rows[0]], mode="overwrite")
+                # first-ever table: schema inferred from the first real
+                # row; use the returned handle, no list-then-reopen.
+                table = self.conn.create_table(
+                    "chunks", data=[rows[0]], mode="overwrite"
+                )
                 rows = rows[1:]
-                table = self._table()
 
             if rows:
                 table.add(rows)
@@ -103,7 +119,7 @@ class LanceRepository:
                 f"INSERT INTO {FTS_TABLE} (id, document_id, text) "
                 "VALUES (:id, :did, :text)"
             ),
-            [{"id": f"{did}:{c.index}", "did": did, "text": c.text} for c in chunks],
+            [{"id": chunk_id(did, c.index), "did": did, "text": c.text} for c in chunks],
         )
 
         if commit:
@@ -120,7 +136,7 @@ class LanceRepository:
         """FTS-only removal; joins the caller's transaction (no commit)."""
         self.db.execute(
             text(f"DELETE FROM {FTS_TABLE} WHERE document_id = :did"),
-            {"did": str(document_id)},
+            {"did": sid(document_id)},
         )
 
     def delete_vectors(self, document_id: UUID) -> None:
@@ -160,7 +176,7 @@ class LanceRepository:
     def fts_search(
         self, query: str, limit: int = 20, doc_ids: Optional[List[str]] = None
     ) -> List[str]:
-        """BM25 top-K ids over chunk text (OR of word tokens)."""
+        """BM25 top-K ids over chunk text (OR of quoted word tokens)."""
         tokens = re.findall(r"\w+", query or "", flags=re.UNICODE)
 
         if not tokens:
@@ -177,40 +193,41 @@ class LanceRepository:
         if not exists:
             return []
 
-        match = " OR ".join(tokens)
+        # Quote each token: bare OR/AND/NOT otherwise break FTS5 syntax.
+        match = " OR ".join(f'"{t}"' for t in tokens)
         params: Dict[str, object] = {"q": match, "n": limit}
         scope = ""
 
         if doc_ids is not None:
-            # Per-chat scoping without touching the FTS schema (dev: no migration).
             placeholders = ",".join(f":d{i}" for i in range(len(doc_ids)))
             scope = f" AND document_id IN ({placeholders})"
             params.update({f"d{i}": did for i, did in enumerate(doc_ids)})
 
-        rows = self.db.execute(
-            text(
-                f"SELECT id FROM {FTS_TABLE} WHERE {FTS_TABLE} MATCH :q{scope} "
-                f"ORDER BY bm25({FTS_TABLE}) LIMIT :n"
-            ),
-            params,
-        ).all()
+        try:
+            rows = self.db.execute(
+                text(
+                    f"SELECT id FROM {FTS_TABLE} WHERE {FTS_TABLE} MATCH :q{scope} "
+                    f"ORDER BY bm25({FTS_TABLE}) LIMIT :n"
+                ),
+                params,
+            ).all()
+        except Exception:
+            return []
 
         return [r[0] for r in rows]
 
     @staticmethod
-    def rrf_merge(
+    def rrf_scored(
         ranked_lists: List[List[str]], top_k: int = 5, rrf_k: int = 60
-    ) -> List[str]:
-        """Reciprocal rank fusion over id rankings."""
+    ) -> List[tuple]:
+        """Reciprocal rank fusion over id rankings, with fused scores."""
         scores: Dict[str, float] = {}
 
         for ranking in ranked_lists:
             for rank, cid in enumerate(ranking):
                 scores[cid] = scores.get(cid, 0.0) + 1.0 / (rrf_k + rank + 1)
 
-        ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-
-        return [cid for cid, _ in ordered[:top_k]]
+        return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
 
     def hybrid_search(
         self,
@@ -232,13 +249,7 @@ class LanceRepository:
         if not vector_ids and not fts_ids:
             return []
 
-        scores: Dict[str, float] = {}
-
-        for ranking in (vector_ids, fts_ids):
-            for rank, cid in enumerate(ranking):
-                scores[cid] = scores.get(cid, 0.0) + 1.0 / (fusion_k + rank + 1)
-
-        merged = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+        merged = self.rrf_scored([vector_ids, fts_ids], top_k=top_k, rrf_k=fusion_k)
         ids = [cid for cid, _ in merged]
 
         rows = (
@@ -260,7 +271,7 @@ class LanceRepository:
             hits.append(
                 {
                     "id": row.id,
-                    "document_id": str(row.document_id),
+                    "document_id": sid(row.document_id),
                     "index": row.index,
                     "heading": row.heading,
                     "page": row.page,
@@ -271,15 +282,19 @@ class LanceRepository:
 
         return hits
 
-    def _table(self):
-        """Open the chunks table, or None when it doesn't exist yet."""
-        try:
-            if "chunks" in self.conn.table_names():
-                return self.conn.open_table("chunks")
+    def _table_names(self) -> List[str]:
+        """Table names; pinned lancedb returns a response with .tables."""
+        return list(self.conn.list_tables().tables)
 
+    def _table(self):
+        """Open the chunks table, or None when it doesn't exist yet.
+
+        Only a genuinely-absent table yields None; anything else raises
+        so the caller sees the true failure instead of a bare None.
+        """
+        if "chunks" not in self._table_names():
             return None
-        except Exception:
-            return None
+        return self.conn.open_table("chunks")
 
     def _check_dim(self, vectors: List[list]) -> None:
         """Fail fast on dim drift (e.g. embed model swapped mid-corpus)."""

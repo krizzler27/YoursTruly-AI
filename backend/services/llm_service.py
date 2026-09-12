@@ -47,7 +47,6 @@ class LLMService:
         system_content = PromptManager.render(
             "chat_instruction.j2",
             history_block=history_block,
-            current_query=current_query,
         )
         return [
             {"role": "system", "content": system_content},

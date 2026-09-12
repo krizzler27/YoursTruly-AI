@@ -28,9 +28,13 @@ notebooks/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Agent Memories and Instructions
 .agents/
 
 # RAG retrieval eval\
 backend/rag_eval/
+
+*/lancedb
