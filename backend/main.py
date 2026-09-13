@@ -15,11 +15,17 @@ from services.llama_engine import LlamaEngine
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+
     try:
         LlamaEngine.get_instance().load()
     except Exception:
         pass
+
+    from dotenv import load_dotenv
+    load_dotenv() # Load Langsmith .env during dev test with public data
+
     yield
+
     try:
         LlamaEngine.get_instance().unload()
     except Exception:

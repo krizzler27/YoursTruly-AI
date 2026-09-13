@@ -26,6 +26,10 @@ class ChatServices:
         conv = self.chat_repo.get_by_id(conversation_id)
         if conv is None:
             raise ValueError(f"Conversation {conversation_id} not found")
+        clean = (title or "").strip()
+        if clean and (conv.title or "").strip() in ("", "New chat"):
+            self.chat_repo.update(conversation_id, title=clean[:32])
+            conv = self.chat_repo.get_by_id(conversation_id)
         return conv
 
     def add_message(

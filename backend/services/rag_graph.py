@@ -133,7 +133,9 @@ class RagGraph:
         decision = state.get("decision")
 
         if not hits and decision is not None and decision.route == "RAG":
-            decision = RouteDecision(route="DIRECT", reason="no hits")
+            decision = RouteDecision(
+                route="DIRECT", reason="no hits — ask with filename"
+            )
 
         return {"hits": hits, "decision": decision, "stages": stages}
 

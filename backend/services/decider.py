@@ -49,6 +49,9 @@ class Decider:
                 return RouteDecision(route="DIRECT", reason="no documents indexed")
             attached = self.docs.list_recent(limit=8)
 
+        if _asks_about_files(clean):
+            return RouteDecision(route="RAG", reason="files inventory question")
+
         inventory = "\n".join(
             f"- {d.filename}" + (f": {d.summary}" if (d.summary or "").strip() else "")
             for d in attached
@@ -81,6 +84,24 @@ class Decider:
             return RouteDecision(route="DIRECT", reason="decider fallback")
         except Exception:
             return RouteDecision(route="DIRECT", reason="decider fallback")
+
+
+def _asks_about_files(query: str) -> bool:
+    """Inventory questions answerable from the attached file list."""
+    import re
+
+    text = query.lower()
+    patterns = [
+        r"\bdo you have\b.*\b(files?|documents?|context)\b",
+        r"\bwhat\b.*\b(files?|documents?)\b",
+        r"\blist\b.*\b(files?|documents?)\b",
+        r"\bwhich\b.*\b(files?|documents?)\b",
+        r"\bany\b.*\b(files?|documents?)\b",
+        r"\battached\b",
+        r"\bin your context\b",
+        r"\bin (the )?context\b",
+    ]
+    return any(re.search(p, text) for p in patterns)
 
 
 def _recover_route(error: str) -> Optional[str]:

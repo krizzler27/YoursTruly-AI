@@ -19,6 +19,21 @@ const statusText = $('#statusText');
 const centerStatusDot = $('#centerStatusDot');
 const centerStatusText = $('#centerStatusText');
 const centerStatus = $('#centerStatus');
+const attachBtn = $('#attachBtn');
+const fileInput = $('#fileInput');
+const docTray = $('#docTray');
+const routePill = $('#routePill');
+const toastStack = $('#toastStack');
+const filesSidebar = $('#filesSidebar');
+const filesList = $('#filesList');
+const filesCount = $('#filesCount');
+const filesToggle = $('#filesToggle');
+
+const ACCEPT_EXTS = ['.txt', '.md', '.pdf'];
+const MAX_FILE_MB = 25;
+const DOC_POLL_MS = 3000;
+const DOC_POLL_MAX_MS = 5 * 60 * 1000;
+const GATE_HINT = 'Indexing docs… chat paused — ask after Indexed';
 
 let selectedModel = null;
 let isStreaming = false;
@@ -27,6 +42,14 @@ let conversations = [];
 let openHistoryMenuId = null;
 let renamingId = null;
 let pendingHistoryDeleteId = null;
+let stagedFiles = new Map();
+let serverDocs = [];
+let uploadingFiles = new Map();
+let docPollTimer = null;
+let docPollStartedAt = 0;
+let prevIndexedNames = new Set();
+let composerBlocked = false;
+let filesEverIndexed = false;
 
 const historyDeleteModal = $('#historyDeleteModal');
 const historyDeleteCancel = $('#historyDeleteCancel');
@@ -102,10 +125,149 @@ function autoResize() {
   input.style.height = Math.min(input.scrollHeight, 160) + 'px';
 }
 
+function updateHintVisibility() {
+  const hasMessages = !!thread.querySelector('.msg');
+  if (!hint) return;
+  hint.style.display = hasMessages ? 'none' : '';
+  if (hasMessages) hint.setAttribute('hidden', '');
+  else hint.removeAttribute('hidden');
+}
+
 function showEmpty(show) {
   empty.style.display = show ? 'block' : 'none';
   trace.style.display = show ? 'block' : 'none';
   if (centerStatus) centerStatus.style.display = show ? 'flex' : 'none';
+  updateHintVisibility();
+}
+
+function shortFileName(name, maxLen = 22) {
+  const t = (name || '').trim();
+  return t.length > maxLen ? t.slice(0, maxLen) + '…' : t;
+}
+
+function validUpload(file) {
+  const name = file.name || '';
+  const dot = name.lastIndexOf('.');
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
+  if (!ACCEPT_EXTS.includes(ext)) return { ok: false, reason: `Only ${ACCEPT_EXTS.join(', ')} supported` };
+  if (file.size > MAX_FILE_MB * 1024 * 1024) return { ok: false, reason: `Exceeds ${MAX_FILE_MB}MB` };
+  if (!name.trim()) return { ok: false, reason: 'Filename missing' };
+  return { ok: true };
+}
+
+function stageLabel(stage) {
+  if (!stage) return '';
+  if (stage === 'deciding') return 'Deciding…';
+  if (stage === 'searching') return 'Searching docs…';
+  if (stage === 'uploading') return 'Uploading…';
+  if (stage === 'indexing') return 'Indexing docs…';
+  if (stage.startsWith('reading')) return `Reading ${stage.replace('reading', '').trim() || 'docs'}…`;
+  if (stage === 'answering') return 'Answering…';
+  return stage;
+}
+
+function setRoutePill(route) {
+  if (!routePill) return;
+  if (!route) { routePill.hidden = true; routePill.textContent = ''; return; }
+  const r = String(route).toUpperCase();
+  routePill.hidden = false;
+  routePill.textContent = r === 'RAG' ? 'RAG · docs' : r;
+  routePill.classList.toggle('rag', r === 'RAG');
+}
+
+function toast(msg, type='info', ttl) {
+  if (!toastStack) return;
+  const el = document.createElement('div');
+  el.className = `toast-item ${type}`;
+  const iconMap = { info: 'i', success: '✓', warning: '!', error: '×' };
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.textContent = iconMap[type] || 'i';
+  const text = document.createElement('span');
+  text.textContent = msg;
+  text.style.flex = '1';
+  text.style.minWidth = '0';
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.type = 'button';
+  close.textContent = '×';
+  close.addEventListener('click', () => dismiss());
+  el.append(icon, text, close);
+  toastStack.appendChild(el);
+  const duration = ttl ?? (type === 'error' ? 6000 : type === 'warning' ? 5000 : 4000);
+  let t = setTimeout(dismiss, duration);
+  function dismiss() {
+    clearTimeout(t);
+    el.style.animation = 'toastOut 140ms ease forwards';
+    setTimeout(() => el.remove(), 150);
+  }
+  el.addEventListener('mouseenter', () => clearTimeout(t));
+  el.addEventListener('mouseleave', () => t = setTimeout(dismiss, 1200));
+}
+
+function isIndexing() {
+  if (uploadingFiles.size > 0) return true;
+  return serverDocs.some(d => d.status === 'pending' || d.status === 'indexing');
+}
+
+function setComposerBlocked(blocked, reason='') {
+  composerBlocked = blocked;
+  if (composer) {
+    if (blocked) composer.setAttribute('data-disabled', '');
+    else composer.removeAttribute('data-disabled');
+  }
+  if (input) input.disabled = blocked;
+  if (sendBtn) sendBtn.disabled = blocked || isStreaming;
+  if (attachBtn) attachBtn.disabled = blocked;
+  if (!hint) return;
+  if (blocked) {
+    hint.textContent = reason || GATE_HINT;
+    hint.style.display = '';
+    hint.removeAttribute('hidden');
+  } else {
+    hint.textContent = 'Enter to send • Shift+Enter for newline';
+    updateHintVisibility();
+  }
+}
+
+function hasIndexedDocs() {
+  return serverDocs.some(d => (d.status || 'indexed') === 'indexed');
+}
+
+function renderFilesSidebar() {
+  const indexed = serverDocs.filter(d => (d.status || 'indexed') === 'indexed');
+  if (filesCount) filesCount.textContent = String(indexed.length);
+  if (filesList) {
+    filesList.innerHTML = '';
+    if (!indexed.length) {
+      filesList.innerHTML = `<div class="empty-hint">No files yet.</div>`;
+    } else {
+      indexed.forEach(doc => {
+        const div = document.createElement('div');
+        div.className = 'files-item';
+        const name = document.createElement('span');
+        name.className = 'files-name';
+        name.textContent = doc.filename;
+        name.title = (doc.summary || '').trim() || doc.filename;
+        const x = document.createElement('button');
+        x.type = 'button';
+        x.className = 'doc-x';
+        x.setAttribute('aria-label', `Remove ${doc.filename}`);
+        x.textContent = '×';
+        x.addEventListener('click', () => deleteServerDoc(doc.id));
+        div.append(name, x);
+        filesList.appendChild(div);
+      });
+    }
+  }
+  const show = indexed.length > 0;
+  if (filesSidebar) filesSidebar.hidden = !show;
+  if (filesToggle) filesToggle.hidden = !show;
+  if (show && !filesEverIndexed) {
+    filesEverIndexed = true;
+    document.body.setAttribute('data-files-open', '');
+  }
+  if (!show) document.body.removeAttribute('data-files-open');
 }
 
 function clearThread() {
@@ -126,11 +288,34 @@ function addMessage(role, content, opts={}) {
   roleEl.textContent = role === 'user' ? 'You' : 'Assistant';
   const card = document.createElement('div');
   card.className = 'msg-card ' + role;
-  body.append(roleEl, card);
+  let statusEl = null;
+  if (role === 'assistant' && opts.streaming) {
+    statusEl = document.createElement('div');
+    statusEl.className = 'rag-status';
+    statusEl.hidden = true;
+    body.append(roleEl, statusEl, card);
+  } else {
+    body.append(roleEl, card);
+  }
   wrap.append(avatar, body);
   thread.appendChild(wrap);
   if (role === 'user') {
-    card.textContent = content;
+    if (opts.files && opts.files.length) {
+      const filesEl = document.createElement('div');
+      filesEl.className = 'msg-files';
+      opts.files.forEach(name => {
+        const chip = document.createElement('span');
+        chip.className = 'doc-chip staged';
+        chip.title = name;
+        chip.innerHTML = `<span class="doc-name"></span>`;
+        chip.querySelector('.doc-name').textContent = shortFileName(name);
+        filesEl.appendChild(chip);
+      });
+      card.appendChild(filesEl);
+    }
+    const textEl = document.createElement('div');
+    textEl.textContent = content;
+    card.appendChild(textEl);
   } else {
     card.innerHTML = content ? mdSimple(content) : '';
     if (opts.streaming) {
@@ -140,7 +325,21 @@ function addMessage(role, content, opts={}) {
     }
   }
   thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
-  return { wrap, card };
+  updateHintVisibility();
+  return { wrap, card, body, statusEl };
+}
+
+function setRagStatus(statusEl, stage) {
+  if (!statusEl) return;
+  if (!stage) { statusEl.hidden = true; statusEl.textContent = ''; return; }
+  statusEl.hidden = false;
+  statusEl.innerHTML = '';
+  const spin = document.createElement('span');
+  spin.className = 'doc-spin';
+  const label = document.createElement('span');
+  label.textContent = stageLabel(stage);
+  statusEl.append(spin, label);
+  thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
 }
 
 function updateAssistantCard(card, content, done=false) {
@@ -151,6 +350,266 @@ function updateAssistantCard(card, content, done=false) {
     card.appendChild(cur);
   }
   thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
+}
+
+function renderTray() {
+  if (!docTray) return;
+  docTray.innerHTML = '';
+  const hasStaged = stagedFiles.size > 0;
+  const hasUploading = uploadingFiles.size > 0;
+  const hasServer = serverDocs.length > 0;
+  if (!hasStaged && !hasUploading && !hasServer) {
+    docTray.hidden = true;
+    return;
+  }
+  docTray.hidden = false;
+
+  uploadingFiles.forEach((info, name) => {
+    const chip = document.createElement('span');
+    const isUpdate = serverDocs.some(d => d.filename === name && d.status === 'indexed');
+    chip.className = 'doc-chip ' + (isUpdate ? 'updating' : 'indexing');
+    chip.title = isUpdate ? `Updating ${name}…` : `${name} — indexing…`;
+    const spin = document.createElement('span');
+    spin.className = 'doc-spin';
+    const label = document.createElement('span');
+    label.className = 'doc-name';
+    label.textContent = isUpdate ? `Updating ${shortFileName(name)}…` : `${shortFileName(name)}…`;
+    chip.append(spin, label);
+    if (info.queueDepth > 0) {
+      const q = document.createElement('span');
+      q.className = 'mono';
+      q.style.fontSize = '10px';
+      q.textContent = `+${info.queueDepth}`;
+      chip.appendChild(q);
+    }
+    docTray.appendChild(chip);
+  });
+
+  stagedFiles.forEach((file, name) => {
+    const chip = document.createElement('span');
+    chip.className = 'doc-chip staged';
+    chip.title = name;
+    const label = document.createElement('span');
+    label.className = 'doc-name';
+    label.textContent = shortFileName(name);
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'doc-x';
+    x.setAttribute('aria-label', `Remove ${name}`);
+    x.textContent = '×';
+    x.addEventListener('click', () => { stagedFiles.delete(name); renderTray(); });
+    chip.append(label, x);
+    docTray.appendChild(chip);
+  });
+
+  serverDocs.forEach(doc => {
+    if (uploadingFiles.has(doc.filename) && doc.status === 'indexed') return;
+    const chip = document.createElement('span');
+    chip.className = 'doc-chip ' + (doc.status || 'indexed');
+    chip.title = (doc.summary || '').trim() || doc.filename;
+    if (doc.status === 'pending' || doc.status === 'indexing') {
+      const spin = document.createElement('span');
+      spin.className = 'doc-spin';
+      const label = document.createElement('span');
+      label.className = 'doc-name';
+      label.textContent = `${shortFileName(doc.filename)}…`;
+      chip.append(spin, label);
+    } else if (doc.status === 'failed') {
+      const label = document.createElement('span');
+      label.className = 'doc-name';
+      label.textContent = shortFileName(doc.filename);
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'doc-retry';
+      retry.setAttribute('aria-label', `Retry ${doc.filename}`);
+      retry.title = 'Retry upload';
+      retry.textContent = '↻';
+      retry.addEventListener('click', () => retryFailedDoc(doc));
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'doc-x';
+      x.setAttribute('aria-label', `Remove ${doc.filename}`);
+      x.textContent = '×';
+      x.addEventListener('click', () => deleteServerDoc(doc.id));
+      chip.append(label, retry, x);
+    } else {
+      const label = document.createElement('span');
+      label.className = 'doc-name';
+      label.textContent = shortFileName(doc.filename);
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'doc-x';
+      x.setAttribute('aria-label', `Remove ${doc.filename}`);
+      x.textContent = '×';
+      x.addEventListener('click', () => deleteServerDoc(doc.id));
+      chip.append(label, x);
+    }
+    docTray.appendChild(chip);
+  });
+  const blocked = isIndexing();
+  setComposerBlocked(blocked, blocked ? GATE_HINT : '');
+  renderFilesSidebar();
+}
+
+async function ensureConversationId() {
+  if (currentConversationId) return currentConversationId;
+  const r = await fetch(`${API_BASE}/api/conversations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({})
+  });
+  if (!r.ok) throw new Error(`Could not create conversation: HTTP ${r.status}`);
+  const conv = await r.json();
+  currentConversationId = conv.id;
+  prevIndexedNames = new Set();
+  await loadConversations();
+  renderHistory();
+  return currentConversationId;
+}
+
+async function loadServerDocs(conversationId) {
+  if (!conversationId) {
+    serverDocs = [];
+    prevIndexedNames = new Set();
+    renderTray();
+    return;
+  }
+  try {
+    const r = await fetch(`${API_BASE}/api/documents?conversation_id=${encodeURIComponent(conversationId)}`);
+    if (!r.ok) throw new Error('failed');
+    serverDocs = await r.json();
+    prevIndexedNames = new Set(serverDocs.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename));
+  } catch {
+    serverDocs = [];
+    prevIndexedNames = new Set();
+  }
+  renderTray();
+}
+
+function startDocPoll() {
+  stopDocPoll();
+  docPollStartedAt = Date.now();
+  docPollTimer = setInterval(pollDocs, DOC_POLL_MS);
+}
+
+function stopDocPoll() {
+  if (docPollTimer) clearInterval(docPollTimer);
+  docPollTimer = null;
+}
+
+async function pollDocs() {
+  if (!currentConversationId) { stopDocPoll(); return; }
+  if (Date.now() - docPollStartedAt > DOC_POLL_MAX_MS) {
+    uploadingFiles.clear();
+    stopDocPoll();
+    renderTray();
+    toast('Indexing timed out after 5 min', 'warning');
+    return;
+  }
+  try {
+    const r = await fetch(`${API_BASE}/api/documents?conversation_id=${encodeURIComponent(currentConversationId)}`);
+    if (!r.ok) return;
+    const docs = await r.json();
+    serverDocs = docs;
+    uploadingFiles.forEach((info, name) => {
+      const match = docs.find(d => d.filename === name);
+      if (!match) return;
+      if (match.id !== info.oldId) uploadingFiles.delete(name);
+    });
+    const currIndexed = new Set(docs.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename));
+    docs.filter(d => (d.status || 'indexed') === 'indexed' && !prevIndexedNames.has(d.filename)).forEach(d => {
+      toast(`${d.filename} indexed`, 'success');
+    });
+    docs.filter(d => d.status === 'failed' && !prevIndexedNames.has(d.filename)).forEach(d => {
+      toast(`${d.filename} failed — retry`, 'error');
+    });
+    prevIndexedNames = currIndexed;
+    const stillIndexing = docs.some(d => d.status === 'pending' || d.status === 'indexing');
+    const hasFailed = docs.some(d => d.status === 'failed');
+    if (!uploadingFiles.size && !stillIndexing) stopDocPoll();
+    renderTray();
+    if (hasFailed && !uploadingFiles.size && !stillIndexing) setComposerBlocked(false);
+  } catch {}
+}
+
+async function uploadStaged(conversationId) {
+  if (!stagedFiles.size) return;
+  const entries = [...stagedFiles.entries()];
+  stagedFiles.clear();
+  const byName = new Map(serverDocs.map(d => [d.filename, d.id]));
+  for (const [name, file] of entries) {
+    const oldId = byName.get(name) || null;
+    uploadingFiles.set(name, { file, queueDepth: 0, startTime: Date.now(), oldId });
+  }
+  renderTray();
+  startDocPoll();
+  for (const [name, file] of entries) {
+    try {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      form.append('conversation_id', conversationId);
+      const r = await fetch(`${API_BASE}/api/ingest`, { method: 'POST', body: form });
+      if (!r.ok) {
+        const info = uploadingFiles.get(name);
+        if (info) {
+          uploadingFiles.delete(name);
+          serverDocs = [{ id: `local-failed-${Date.now()}`, filename: name, status: 'failed', summary: `Upload failed: HTTP ${r.status}`, conversation_id: conversationId }, ...serverDocs];
+          toast(`Upload failed: ${name} (HTTP ${r.status})`, 'error');
+        }
+        continue;
+      }
+      const data = await r.json().catch(() => ({}));
+      const info = uploadingFiles.get(name);
+      if (info && typeof data.queue_depth === 'number') {
+        info.queueDepth = data.queue_depth;
+        if (data.queue_depth > 0) toast(`+${data.queue_depth} ahead in queue`, 'info');
+      }
+      renderTray();
+    } catch {
+      uploadingFiles.delete(name);
+      toast(`Upload failed: ${name}`, 'error');
+    }
+  }
+  renderTray();
+  pollDocs();
+}
+
+async function uploadFilesNow(files) {
+  await ensureConversationId();
+  files.forEach(f => stagedFiles.set(f.name, f));
+  renderTray();
+  await uploadStaged(currentConversationId);
+}
+
+async function deleteServerDoc(documentId) {
+  try {
+    const r = await fetch(`${API_BASE}/api/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const gone = serverDocs.find(d => String(d.id) === String(documentId));
+    serverDocs = serverDocs.filter(d => String(d.id) !== String(documentId));
+    prevIndexedNames = new Set(serverDocs.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename));
+    if (gone) toast(`Deleted ${gone.filename}`, 'success');
+    renderTray();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function retryFailedDoc(doc) {
+  const cached = uploadingFiles.get(doc.filename);
+  const file = cached ? cached.file : null;
+  try {
+    await fetch(`${API_BASE}/api/documents/${encodeURIComponent(doc.id)}`, { method: 'DELETE' });
+  } catch {}
+  serverDocs = serverDocs.filter(d => String(d.id) !== String(doc.id));
+  if (file && currentConversationId) {
+    stagedFiles.set(file.name, file);
+    renderTray();
+    uploadStaged(currentConversationId);
+  } else {
+    renderTray();
+    if (fileInput) fileInput.click();
+  }
 }
 
 async function checkModelHealth() {
@@ -180,16 +639,14 @@ async function fetchModels(forcedHealthy = null) {
       const pq = document.getElementById('modelQuant');
       if (pq) { pq.textContent = first.quant; pq.hidden = !first.quant; }
       hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
-      hint.style.display = '';
-      hint.removeAttribute('hidden');
+      updateHintVisibility();
       setModelPillDisabled(!healthy);
       if (!healthy) { const f2 = parseModel(selectedModel.name || selectedModel); modelNameEl.textContent = f2.base; }
       return healthy;
     }
     setStatus(healthy, healthy ? 'no models — add GGUF to ' + (data.path || '~/.yourstrulyai/models') : 'MODEL OFFLINE');
     hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
-    hint.style.display = '';
-    hint.removeAttribute('hidden');
+    updateHintVisibility();
     setModelPillDisabled(true);
     return healthy;
   } catch (e) {
@@ -318,9 +775,18 @@ async function deleteHistoryConversation(id) {
     conversations = conversations.filter(x => x.id !== id);
     if (currentConversationId === id) {
       currentConversationId = null;
+      serverDocs = [];
+      stagedFiles.clear();
+      uploadingFiles.clear();
+      prevIndexedNames = new Set();
+      filesEverIndexed = false;
+      stopDocPoll();
+      renderTray();
       clearThread();
       showEmpty(true);
       ttftEl.textContent = '';
+      setRoutePill(null);
+      setComposerBlocked(false);
     }
     renderHistory();
     await loadConversations();
@@ -427,6 +893,14 @@ function renderHistory() {
         if (openHistoryMenuId) { closeHistoryMenu(); }
         if (currentConversationId === c.id) return;
         currentConversationId = c.id;
+        stagedFiles.clear();
+        uploadingFiles.clear();
+        prevIndexedNames = new Set();
+        filesEverIndexed = false;
+        stopDocPoll();
+        setRoutePill(null);
+        setComposerBlocked(false);
+        ttftEl.textContent = '';
         renderHistory();
         loadMessages(c.id);
       });
@@ -466,6 +940,9 @@ async function loadMessages(conversationId) {
     if (!r.ok) throw new Error('failed');
     const msgs = await r.json();
     clearThread();
+    setRoutePill(null);
+    ttftEl.textContent = '';
+    loadServerDocs(conversationId);
     if (!msgs.length) {
       showEmpty(true);
       return;
@@ -482,7 +959,13 @@ async function loadMessages(conversationId) {
 
 async function send() {
   const query = input.value.trim();
-  if (!query || isStreaming) return;
+  const hasStaged = stagedFiles.size > 0;
+  if ((!query && !hasStaged) || isStreaming) return;
+  if (composerBlocked || isIndexing()) {
+    toast('Indexing docs… chat paused — ask after Indexed', 'warning');
+    setComposerBlocked(true, GATE_HINT);
+    return;
+  }
   const isFirst = !currentConversationId && thread.querySelectorAll('.msg').length === 0;
   if (isFirst) {
     tracePath.classList.remove('animate');
@@ -493,16 +976,41 @@ async function send() {
   closeHistoryMenu();
   sendBtn.disabled = true;
   ttftEl.textContent = '';
-  addMessage('user', query);
+  setRoutePill(null);
+
+  if (!query && hasStaged) {
+    try {
+      await ensureConversationId();
+      const cid = currentConversationId;
+      input.value = '';
+      autoResize();
+      await uploadStaged(cid);
+      await loadConversations();
+      renderHistory();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      isStreaming = false;
+      sendBtn.disabled = false;
+      input.focus();
+    }
+    return;
+  }
+
+  const attachedNames = [...stagedFiles.keys()];
+  addMessage('user', query, { files: attachedNames });
   input.value = '';
   autoResize();
 
-  const { card } = addMessage('assistant', '', { streaming: true });
+  const { card, statusEl } = addMessage('assistant', '', { streaming: true });
   let acc = '';
   let start = performance.now();
   let ttftDone = false;
 
   try {
+    await ensureConversationId();
+    if (attachedNames.length) await uploadStaged(currentConversationId);
+
     const modelPath = selectedModel ? (selectedModel.path || selectedModel) : undefined;
     const payload = { query, model: modelPath || undefined };
     if (currentConversationId) payload.conversation_id = currentConversationId;
@@ -513,16 +1021,17 @@ async function send() {
     });
     const newId = resp.headers.get('X-Conversation-Id') || resp.headers.get('x-conversation-id');
     if (newId) currentConversationId = newId;
+    const routeHeader = resp.headers.get('X-Route') || resp.headers.get('x-route');
+    if (routeHeader) setRoutePill(routeHeader);
     if (!resp.ok) {
       const t = await resp.text();
-      // keep conversation id even on 500 so next turn stays in same thread
       if (newId) {
         await loadConversations();
         renderHistory();
       }
       throw new Error(`HTTP ${resp.status}: ${t}`);
     }
-    const ttftHeader = resp.headers.get('X-TTFT');
+    const ttftHeader = resp.headers.get('X-TTFT') || resp.headers.get('x-ttft');
     if (ttftHeader) ttftEl.textContent = `TTFT ${Number(ttftHeader).toFixed(0)} ms`;
 
     const reader = resp.body.getReader();
@@ -535,10 +1044,23 @@ async function send() {
       const parts = buf.split('\n\n');
       buf = parts.pop();
       for (const chunk of parts) {
-        const line = chunk.trim();
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
+        const lines = chunk.split('\n').map(l => l.trim()).filter(Boolean);
+        let event = null;
+        let data = null;
+        for (const ln of lines) {
+          if (ln.startsWith('event:')) event = ln.slice(6).trim();
+          else if (ln.startsWith('data:')) data = ln.slice(5).trim();
+        }
+        if (data === null || data === '') continue;
+        if (event === 'stage') {
+          try {
+            const j = JSON.parse(data);
+            if (j.stage) setRagStatus(statusEl, j.stage);
+          } catch {}
+          continue;
+        }
         if (data === '[DONE]') {
+          if (statusEl) { statusEl.hidden = true; statusEl.textContent = ''; }
           updateAssistantCard(card, acc, true);
           isStreaming = false;
           sendBtn.disabled = false;
@@ -552,6 +1074,7 @@ async function send() {
         }
         try {
           const j = JSON.parse(data);
+          if (j.stage && !j.content) { setRagStatus(statusEl, j.stage); continue; }
           const delta = j.content || '';
           if (delta) {
             if (!ttftDone) {
@@ -565,16 +1088,19 @@ async function send() {
         } catch {}
       }
     }
+    if (statusEl) { statusEl.hidden = true; statusEl.textContent = ''; }
     updateAssistantCard(card, acc || 'No response.', true);
     await loadConversations();
   } catch (e) {
+    if (statusEl) { statusEl.hidden = true; statusEl.textContent = ''; }
     const m = e && e.message || '';
     const isBusy = m.includes('429') || m.includes('System Busy');
     const msg = isBusy ? '**System Busy — model is generating.** Please wait and try again.' : '**Could not reach backend / model not loaded.** Check ~/.yourstrulyai/models and backend logs.';
     updateAssistantCard(card, msg, true);
   } finally {
     isStreaming = false;
-    sendBtn.disabled = false;
+    if (isIndexing()) setComposerBlocked(true, GATE_HINT);
+    else { setComposerBlocked(false); sendBtn.disabled = false; }
     input.focus();
     await loadConversations();
     renderHistory();
@@ -648,11 +1174,50 @@ input.addEventListener('keydown', (e) => {
 });
 composer.addEventListener('submit', (e) => { e.preventDefault(); send(); });
 sendBtn.addEventListener('click', (e) => { e.preventDefault(); send(); });
+if (filesToggle) {
+  filesToggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!hasIndexedDocs()) return;
+    if (document.body.hasAttribute('data-files-open')) document.body.removeAttribute('data-files-open');
+    else document.body.setAttribute('data-files-open', '');
+  });
+}
+if (attachBtn && fileInput) {
+  attachBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const files = [...(fileInput.files || [])];
+    fileInput.value = '';
+    if (!files.length) return;
+    const valids = [];
+    files.forEach(f => {
+      const check = validUpload(f);
+      if (!check.ok) toast(`${f.name}: ${check.reason}`, 'error');
+      else valids.push(f);
+    });
+    if (!valids.length) { input.focus(); return; }
+    try {
+      await uploadFilesNow(valids);
+    } catch (e) {
+      console.error(e);
+      toast('Upload failed — retry', 'error');
+    }
+    input.focus();
+  });
+}
 $('#newChat').addEventListener('click', async () => {
   currentConversationId = null;
+  serverDocs = [];
+  stagedFiles.clear();
+  uploadingFiles.clear();
+  prevIndexedNames = new Set();
+  filesEverIndexed = false;
+  stopDocPoll();
+  renderTray();
   clearThread();
   showEmpty(true);
   ttftEl.textContent = '';
+  setRoutePill(null);
+  setComposerBlocked(false);
   closeHistoryMenu();
   cancelHistoryRename();
   renderHistory();
@@ -696,9 +1261,12 @@ window.addEventListener('focus', pollHealth);
 (async () => {
   await loadConversations();
   renderHistory();
+  renderTray();
   const h = await fetchModels();
   lastHealthy = h;
   autoResize();
   if (!currentConversationId) showEmpty(true);
+  else loadServerDocs(currentConversationId);
+  updateHintVisibility();
   setInterval(pollHealth, 10000);
 })();
