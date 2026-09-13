@@ -68,6 +68,7 @@ class DocumentResponse(BaseModel):
     summary: str = ""
     created_at: datetime
     updated_at: datetime
+    queue_depth: int = 0  # jobs ahead in the ingest queue (202 only)
 
     model_config = {"from_attributes": True}
 

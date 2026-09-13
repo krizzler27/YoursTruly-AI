@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from db.models import Base, ConversationsModel, DocumentsModel
+from db.models import Base, ConversationsModel, DocumentChunksModel, DocumentsModel
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, chunk_id, sid
 from schemas.rag_schemas import Chunk, RouteDecision
@@ -109,6 +109,47 @@ class Rrf(DbCase):
         self.assertEqual(LanceRepository.rrf_scored([[], []]), [])
 
 
+class HybridVector(DbCase):
+    EAST = [1.0] * DIM
+    WEST = [-1.0] * DIM
+
+    def _store(self, lance, uid, text, vector, conv):
+        lance.upsert_chunks(
+            uid, [Chunk(text=text, index=0, vector=vector)],
+            conversation_id=conv,
+        )
+        self.db.add(DocumentChunksModel(
+            id=chunk_id(uid, 0), document_id=uid, index=0, text=text))
+        self.db.commit()
+
+    def test_hybrid_fuses_vector_and_bm25(self):
+        lance = self.lance()
+        conv = self.conv()
+        uid_a, uid_b = uuid.uuid4(), uuid.uuid4()
+        self._store(lance, uid_a, "alpha aerospace", self.EAST, conv)
+        self._store(lance, uid_b, "beta bakery", self.WEST, conv)
+        # Query vector near A, query words match B: fusion must return both,
+        # B first (ranked by both arms beats ranked by one).
+        hits = lance.hybrid_search(
+            "bakery", list(self.EAST), top_k=5,
+            conversation_id=conv, doc_ids=[sid(uid_a), sid(uid_b)])
+        self.assertEqual([h["id"] for h in hits],
+                         [chunk_id(uid_b, 0), chunk_id(uid_a, 0)])
+        self.assertEqual(hits[0]["text"], "beta bakery")
+        self.assertEqual(hits[0]["document_id"], sid(uid_b))
+
+    def test_vector_respects_conversation_scope(self):
+        lance = self.lance()
+        conv_a, conv_b = self.conv(), self.conv()
+        uid = uuid.uuid4()
+        self._store(lance, uid, "alpha aerospace", self.EAST, conv_a)
+        self.assertEqual(
+            lance.vector_search(list(self.EAST), conversation_id=conv_b), [])
+        self.assertEqual(
+            lance.hybrid_search("alpha", list(self.EAST),
+                                conversation_id=conv_b, doc_ids=[]), [])
+
+
 class Chunking(DbCase):
     def svc(self):
         return IngestService(db=self.db, engine=FakeEmbed(), lance=self.lance())
@@ -167,9 +208,12 @@ class Budget(unittest.TestCase):
     def test_build_messages_caps_and_cites_page(self):
         db = MagicMock()
         rag = RagService(db=db, engine=MagicMock(), lance=MagicMock(), docs=MagicMock())
-        rag.docs.get_by_id.return_value = MagicMock(filename="f.pdf")
+        uid = uuid.uuid4()
+        db.query.return_value.filter.return_value.all.return_value = [
+            MagicMock(id=uid, filename="f.pdf")
+        ]
         hits = [
-            {"document_id": str(uuid.uuid4()), "heading": "",
+            {"document_id": str(uid), "heading": "",
              "page": 2, "text": "x" * 50000, "score": 1.0},
         ]
         with patch("services.rag_service.get_default_ctx", return_value=2048):
@@ -177,6 +221,7 @@ class Budget(unittest.TestCase):
         system = msgs[0]["content"]
         self.assertIn("[f.pdf:p2]", system)
         self.assertLessEqual(len(system), 2048 * 4 + 8000)
+        db.query.return_value.filter.return_value.all.assert_called_once_with()
 
 
 class Graph(unittest.TestCase):
@@ -312,6 +357,75 @@ class QueueMechanics(DbCase):
         )
         self.assertIsNotNone(row)
         self.assertEqual(row.status, "failed")
+
+    def _indexed(self, cid, filename="a.md"):
+        row = DocumentsModel(filename=filename, chunk_count=1,
+                             status="indexed", conversation_id=cid, summary="s")
+        self.db.add(row)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def test_submit_keeps_live_index(self):
+        cid = self.conv()
+        live = self._indexed(cid)
+        with patch.object(ingest_queue, "_ensure_worker", lambda: None):
+            pending = ingest_queue.submit_ingest(
+                self.db, self.write("n.md"), "a.md", cid)
+        self.assertTrue(pending.filename.startswith("__pending__"))
+        self.assertEqual(
+            self.db.query(DocumentsModel).filter_by(id=live.id).one().status,
+            "indexed")
+        visible = DocumentRepository(self.db).list_by_conversation(cid)
+        self.assertEqual([d.filename for d in visible], ["a.md"])
+
+    def test_failed_replacement_keeps_live_index(self):
+        cid = self.conv()
+        live = self._indexed(cid)
+        temp = DocumentsModel(filename="__pending__x", chunk_count=0,
+                              status="indexing", conversation_id=cid, summary="")
+        self.db.add(temp)
+        self.db.commit()
+        ingest_queue._mark_failed(self.db, temp.id, "a.md", cid, "boom")
+        self.assertIsNone(
+            self.db.query(DocumentsModel).filter_by(id=temp.id).first())
+        kept = self.db.query(DocumentsModel).filter_by(id=live.id).one()
+        self.assertEqual((kept.status, kept.filename), ("indexed", "a.md"))
+
+    def test_process_removes_temp_row_on_success(self):
+        import services.llm_service as llm_mod
+        import services.ingest_service as ingest_mod
+
+        cid = self.conv()
+        fake_llm = MagicMock()
+        fake_llm.return_value.invoke.return_value = "a short summary"
+        canon = Path(self.tmp.name) / "canon.md"
+        with patch.object(ingest_queue, "_ensure_worker", lambda: None), \
+             patch.object(ingest_queue, "EmbeddingEngine", FakeEmbed), \
+             patch.object(ingest_queue, "SessionLocal", lambda: self.db), \
+             patch.object(ingest_queue, "LanceRepository",
+                          lambda db: self.lance()), \
+             patch.object(llm_mod, "LLMService", fake_llm), \
+             patch.object(ingest_mod, "stored_upload_path",
+                          lambda c, f: canon):
+            src = self.write("t.md", "hello world " * 100)
+            doc = ingest_queue.submit_ingest(self.db, src, "t.md", cid)
+            self.drain()  # keep the real worker out of it
+            ingest_queue._process((str(doc.id), src, "t.md", str(cid)))
+        rows = self.db.query(DocumentsModel).filter(
+            DocumentsModel.conversation_id == cid).all()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            (rows[0].filename, rows[0].status, rows[0].summary),
+            ("t.md", "indexed", "a short summary"))
+
+    def test_queue_depth_excludes_self(self):
+        cid = self.conv()
+        with patch.object(ingest_queue, "_ensure_worker", lambda: None):
+            ingest_queue.submit_ingest(self.db, self.write("q1.md"), "q1.md", cid)
+            self.assertEqual(ingest_queue.queue_depth(), 0)
+            ingest_queue.submit_ingest(self.db, self.write("q2.md"), "q2.md", cid)
+            self.assertEqual(ingest_queue.queue_depth(), 1)
 
 
 class AppContract(unittest.TestCase):

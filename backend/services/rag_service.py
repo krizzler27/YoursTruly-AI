@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from db.models import DocumentsModel
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, sid
 from services.llama_engine import EmbeddingEngine, get_default_ctx
@@ -98,6 +99,23 @@ class RagService:
 
         return existing.id
 
+    def _filenames(self, document_ids) -> Dict[str, str]:
+        """One query mapping dashed document ids to filenames."""
+        ids = []
+        for raw in document_ids:
+            try:
+                ids.append(uuid.UUID(str(raw)))
+            except Exception:
+                continue
+        if not ids:
+            return {}
+        rows = (
+            self.db.query(DocumentsModel)
+            .filter(DocumentsModel.id.in_(ids))
+            .all()
+        )
+        return {sid(r.id): r.filename for r in rows}
+
     def build_messages(
         self,
         query: str,
@@ -114,13 +132,11 @@ class RagService:
         blocks = []
         used = 0
 
-        for h in sorted(hits, key=lambda x: x.get("score", 0.0), reverse=True):
-            try:
-                name = self.docs.get_by_id(
-                    uuid.UUID(str(h.get("document_id")))
-                ).filename
-            except Exception:
-                name = str(h.get("document_id", ""))
+        ordered = sorted(hits, key=lambda x: x.get("score", 0.0), reverse=True)
+        names = self._filenames(h.get("document_id") for h in ordered)
+
+        for h in ordered:
+            name = names.get(str(h.get("document_id", "")), str(h.get("document_id", "")))
 
             heading = (h.get("heading") or "").strip()
             page = h.get("page")

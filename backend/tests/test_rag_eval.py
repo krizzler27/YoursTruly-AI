@@ -55,7 +55,10 @@ INGEST_DEADLINE_S = 1500
 
 
 def ensure_tracing():
-    """LangSmith on, or owner explicitly accepts a tracelsess run."""
+    """Report LangSmith state; never prompt (hangs headless runs).
+
+    Set EVAL_REQUIRE_TRACE=1 to fail fast instead of running untraced.
+    """
     try:
         from dotenv import load_dotenv
 
@@ -65,15 +68,10 @@ def ensure_tracing():
     on = os.environ.get("LANGSMITH_TRACING", "").lower() == "true" and bool(
         os.environ.get("LANGSMITH_API_KEY")
     )
-    if on:
-        print("LangSmith tracing ON (LangGraph runs will be traced)")
-        return
-    ans = input(
-        "LangSmith tracing is OFF (need LANGSMITH_TRACING=true + "
-        "LANGSMITH_API_KEY in env). Continue without traces? [y/N] "
-    ).strip().lower()
-    if ans != "y":
-        raise unittest.SkipTest("owner declined run without LangSmith tracing")
+    print("LangSmith tracing ON (LangGraph runs will be traced)"
+          if on else "LangSmith tracing OFF (untraced run)")
+    if not on and os.environ.get("EVAL_REQUIRE_TRACE") == "1":
+        raise unittest.SkipTest("EVAL_REQUIRE_TRACE=1 but tracing is off")
 
 
 def sample_rows(n=N_QS):
@@ -100,6 +98,7 @@ class WholeRagEval(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         ensure_tracing()
+        open(TRACE, "w", encoding="utf-8").close()  # fresh trace per run
 
         # Temp FILE db, not :memory:: the queue worker runs on its own
         # thread and each thread gets a private :memory: database.
@@ -265,6 +264,9 @@ class WholeRagEval(unittest.TestCase):
                     f"no citation for {q['expected_source']}")
                 cited += 1
                 type(self).results[q["id"]] = (q, out)
+        self.assertGreater(
+            gated_rag, 0,
+            "gate routed nothing to RAG: recall below is vacuous")
         print(f"\neval result: gate=RAG {gated_rag}/{len(self.qs)} "
               f"recall@1={r1}/{gated_rag} recall@5={r5}/{gated_rag} "
               f"cited={cited}/{gated_rag} (trace: {TRACE.name})")
