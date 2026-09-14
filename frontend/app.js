@@ -1,5 +1,10 @@
-const API_BASE = 'http://127.0.0.1:8000';
-const $ = (s, r=document) => r.querySelector(s);
+import { API_BASE, ACCEPT_EXTS, MAX_FILE_MB, DOC_POLL_MS, DOC_POLL_MAX_MS, GATE_HINT } from './js/shared/config.js';
+import { $, escapeHtml, mdSimple, shortFileName, truncateTitle, parseModel, displayName } from './js/shared/utils.js';
+import { ICONS } from './js/shared/icons.js';
+import { createTicker } from './js/shared/ticker.js';
+import { createToast } from './js/shared/toast.js';
+import { store } from './js/chat/store.js';
+import * as chatApi from './js/chat/api.js';
 
 const thread = $('#thread');
 const empty = $('#empty');
@@ -24,79 +29,19 @@ const fileInput = $('#fileInput');
 const docTray = $('#docTray');
 const routePill = $('#routePill');
 const toastStack = $('#toastStack');
-const filesSidebar = $('#filesSidebar');
-const filesList = $('#filesList');
-const filesCount = $('#filesCount');
-const filesToggle = $('#filesToggle');
+const contextBar = $('#contextBar');
+const contextFiles = $('#contextFiles');
+const contextToggle = $('#contextToggle');
 
-const ACCEPT_EXTS = ['.txt', '.md', '.pdf'];
-const MAX_FILE_MB = 25;
-const DOC_POLL_MS = 3000;
-const DOC_POLL_MAX_MS = 5 * 60 * 1000;
-const GATE_HINT = 'Indexing docs… chat paused — ask after Indexed';
-
-let selectedModel = null;
-let isStreaming = false;
-let currentConversationId = null;
-let conversations = [];
-let openHistoryMenuId = null;
-let renamingId = null;
-let pendingHistoryDeleteId = null;
-let stagedFiles = new Map();
-let serverDocs = [];
-let uploadingFiles = new Map();
-let docPollTimer = null;
-let docPollStartedAt = 0;
-let prevIndexedNames = new Set();
-let composerBlocked = false;
-let filesEverIndexed = false;
+const ticker = createTicker(thread);
+function setRagStatus(el, stage) { ticker.set(el, stage); }
+function stopTicker(el) { ticker.stop(el); }
 
 const historyDeleteModal = $('#historyDeleteModal');
 const historyDeleteCancel = $('#historyDeleteCancel');
 const historyDeleteConfirm = $('#historyDeleteConfirm');
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
-
-function mdSimple(src) {
-  const fences = [];
-  let html = src.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
-    const idx = fences.length;
-    fences.push(`<pre><code>${escapeHtml(code.trim())}</code></pre>`);
-    return `\x00FENCE${idx}\x00`;
-  });
-  html = html.replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`);
-  html = escapeHtml(html);
-  html = html.replace(/\x00FENCE(\d+)\x00/g, (_, i) => fences[Number(i)]);
-  html = html.replace(/\*\*([^\n*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/__([^\n_]+)__/g, '<strong>$1</strong>');
-  html = html.replace(/\*([^\n*]+)\*/g, '<em>$1</em>');
-  const lines = html.split('\n');
-  let out = '';
-  let inList = false;
-  let listType = null;
-  function closeList(){ if(inList){ out += `</${listType}>`; inList=false; listType=null; } }
-  for (let line of lines) {
-    if (line.includes('<pre>')) { closeList(); out += line; continue; }
-    if (/^\s*$/.test(line)) { closeList(); continue; }
-    const ulMatch = line.match(/^\s*[-*]\s+(.*)$/);
-    const olMatch = line.match(/^\s*\d+\.\s+(.*)$/);
-    if (ulMatch) {
-      if (!inList || listType !== 'ul') { closeList(); out += '<ul>'; inList=true; listType='ul'; }
-      out += `<li>${ulMatch[1]}</li>`;
-    } else if (olMatch) {
-      if (!inList || listType !== 'ol') { closeList(); out += '<ol>'; inList=true; listType='ol'; }
-      out += `<li>${olMatch[1]}</li>`;
-    } else {
-      closeList();
-      if (line.startsWith('<pre>')) out += line;
-      else out += `<p>${line}</p>`;
-    }
-  }
-  closeList();
-  return out;
-}
+const toast = createToast(toastStack);
 
 function setStatus(online, text) {
   statusDot.className = 'status-dot' + (online ? '' : ' off');
@@ -140,11 +85,6 @@ function showEmpty(show) {
   updateHintVisibility();
 }
 
-function shortFileName(name, maxLen = 22) {
-  const t = (name || '').trim();
-  return t.length > maxLen ? t.slice(0, maxLen) + '…' : t;
-}
-
 function validUpload(file) {
   const name = file.name || '';
   const dot = name.lastIndexOf('.');
@@ -153,17 +93,6 @@ function validUpload(file) {
   if (file.size > MAX_FILE_MB * 1024 * 1024) return { ok: false, reason: `Exceeds ${MAX_FILE_MB}MB` };
   if (!name.trim()) return { ok: false, reason: 'Filename missing' };
   return { ok: true };
-}
-
-function stageLabel(stage) {
-  if (!stage) return '';
-  if (stage === 'deciding') return 'Deciding…';
-  if (stage === 'searching') return 'Searching docs…';
-  if (stage === 'uploading') return 'Uploading…';
-  if (stage === 'indexing') return 'Indexing docs…';
-  if (stage.startsWith('reading')) return `Reading ${stage.replace('reading', '').trim() || 'docs'}…`;
-  if (stage === 'answering') return 'Answering…';
-  return stage;
 }
 
 function setRoutePill(route) {
@@ -175,49 +104,19 @@ function setRoutePill(route) {
   routePill.classList.toggle('rag', r === 'RAG');
 }
 
-function toast(msg, type='info', ttl) {
-  if (!toastStack) return;
-  const el = document.createElement('div');
-  el.className = `toast-item ${type}`;
-  const iconMap = { info: 'i', success: '✓', warning: '!', error: '×' };
-  const icon = document.createElement('span');
-  icon.className = 'toast-icon';
-  icon.textContent = iconMap[type] || 'i';
-  const text = document.createElement('span');
-  text.textContent = msg;
-  text.style.flex = '1';
-  text.style.minWidth = '0';
-  const close = document.createElement('button');
-  close.className = 'toast-close';
-  close.type = 'button';
-  close.textContent = '×';
-  close.addEventListener('click', () => dismiss());
-  el.append(icon, text, close);
-  toastStack.appendChild(el);
-  const duration = ttl ?? (type === 'error' ? 6000 : type === 'warning' ? 5000 : 4000);
-  let t = setTimeout(dismiss, duration);
-  function dismiss() {
-    clearTimeout(t);
-    el.style.animation = 'toastOut 140ms ease forwards';
-    setTimeout(() => el.remove(), 150);
-  }
-  el.addEventListener('mouseenter', () => clearTimeout(t));
-  el.addEventListener('mouseleave', () => t = setTimeout(dismiss, 1200));
-}
-
 function isIndexing() {
-  if (uploadingFiles.size > 0) return true;
-  return serverDocs.some(d => d.status === 'pending' || d.status === 'indexing');
+  if (store.state.uploadingFiles.size > 0) return true;
+  return store.state.serverDocs.some(d => d.status === 'pending' || d.status === 'indexing');
 }
 
 function setComposerBlocked(blocked, reason='') {
-  composerBlocked = blocked;
+  store.set({ composerBlocked: blocked });
   if (composer) {
     if (blocked) composer.setAttribute('data-disabled', '');
     else composer.removeAttribute('data-disabled');
   }
   if (input) input.disabled = blocked;
-  if (sendBtn) sendBtn.disabled = blocked || isStreaming;
+  if (sendBtn) sendBtn.disabled = blocked || store.state.isStreaming;
   if (attachBtn) attachBtn.disabled = blocked;
   if (!hint) return;
   if (blocked) {
@@ -231,43 +130,46 @@ function setComposerBlocked(blocked, reason='') {
 }
 
 function hasIndexedDocs() {
-  return serverDocs.some(d => (d.status || 'indexed') === 'indexed');
+  return store.state.serverDocs.some(d => (d.status || 'indexed') === 'indexed');
 }
 
-function renderFilesSidebar() {
-  const indexed = serverDocs.filter(d => (d.status || 'indexed') === 'indexed');
-  if (filesCount) filesCount.textContent = String(indexed.length);
-  if (filesList) {
-    filesList.innerHTML = '';
-    if (!indexed.length) {
-      filesList.innerHTML = `<div class="empty-hint">No files yet.</div>`;
-    } else {
-      indexed.forEach(doc => {
-        const div = document.createElement('div');
-        div.className = 'files-item';
-        const name = document.createElement('span');
-        name.className = 'files-name';
-        name.textContent = doc.filename;
-        name.title = (doc.summary || '').trim() || doc.filename;
-        const x = document.createElement('button');
-        x.type = 'button';
-        x.className = 'doc-x';
-        x.setAttribute('aria-label', `Remove ${doc.filename}`);
-        x.textContent = '×';
-        x.addEventListener('click', () => deleteServerDoc(doc.id));
-        div.append(name, x);
-        filesList.appendChild(div);
-      });
+function renderContextBar() {
+  const indexed = store.state.serverDocs.filter(d => (d.status || 'indexed') === 'indexed');
+  const indexing = store.state.uploadingFiles.size > 0 || store.state.serverDocs.some(d => d.status === 'pending' || d.status === 'indexing');
+  if (contextFiles) {
+    contextFiles.innerHTML = '';
+    indexed.forEach(doc => {
+      const pill = document.createElement('span');
+      pill.className = 'context-pill';
+      pill.title = (doc.summary || '').trim() || doc.filename;
+      const name = document.createElement('span');
+      name.className = 'doc-name';
+      name.textContent = shortFileName(doc.filename);
+      const ok = document.createElement('span');
+      ok.className = 'toast-icon';
+      ok.innerHTML = ICONS.check;
+      ok.style.width = '14px'; ok.style.height = '14px'; ok.style.flexBasis = '14px';
+      pill.append(name, ok);
+      contextFiles.appendChild(pill);
+    });
+    if (indexing) {
+      const pill = document.createElement('span');
+      pill.className = 'context-pill indexing';
+      const spin = document.createElement('span');
+      spin.className = 'doc-spin';
+      const label = document.createElement('span');
+      label.className = 'doc-name';
+      label.textContent = 'Indexing…';
+      pill.append(spin, label);
+      contextFiles.appendChild(pill);
     }
   }
-  const show = indexed.length > 0;
-  if (filesSidebar) filesSidebar.hidden = !show;
-  if (filesToggle) filesToggle.hidden = !show;
-  if (show && !filesEverIndexed) {
-    filesEverIndexed = true;
-    document.body.setAttribute('data-files-open', '');
+  const show = indexed.length > 0 || indexing;
+  if (contextBar) {
+    contextBar.hidden = !show;
+    contextBar.classList.toggle('collapsed', store.state.contextCollapsed && indexed.length > 0);
   }
-  if (!show) document.body.removeAttribute('data-files-open');
+  if (contextToggle) contextToggle.textContent = (store.state.contextCollapsed && indexed.length > 0) ? '+' : '–';
 }
 
 function clearThread() {
@@ -318,28 +220,10 @@ function addMessage(role, content, opts={}) {
     card.appendChild(textEl);
   } else {
     card.innerHTML = content ? mdSimple(content) : '';
-    if (opts.streaming) {
-      const cur = document.createElement('span');
-      cur.className = 'cursor';
-      card.appendChild(cur);
-    }
   }
   thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
   updateHintVisibility();
   return { wrap, card, body, statusEl };
-}
-
-function setRagStatus(statusEl, stage) {
-  if (!statusEl) return;
-  if (!stage) { statusEl.hidden = true; statusEl.textContent = ''; return; }
-  statusEl.hidden = false;
-  statusEl.innerHTML = '';
-  const spin = document.createElement('span');
-  spin.className = 'doc-spin';
-  const label = document.createElement('span');
-  label.textContent = stageLabel(stage);
-  statusEl.append(spin, label);
-  thread.parentElement.scrollTop = thread.parentElement.scrollHeight;
 }
 
 function updateAssistantCard(card, content, done=false) {
@@ -355,18 +239,18 @@ function updateAssistantCard(card, content, done=false) {
 function renderTray() {
   if (!docTray) return;
   docTray.innerHTML = '';
-  const hasStaged = stagedFiles.size > 0;
-  const hasUploading = uploadingFiles.size > 0;
-  const hasServer = serverDocs.length > 0;
+  const hasStaged = store.state.stagedFiles.size > 0;
+  const hasUploading = store.state.uploadingFiles.size > 0;
+  const hasServer = store.state.serverDocs.length > 0;
   if (!hasStaged && !hasUploading && !hasServer) {
     docTray.hidden = true;
     return;
   }
   docTray.hidden = false;
 
-  uploadingFiles.forEach((info, name) => {
+  store.state.uploadingFiles.forEach((info, name) => {
     const chip = document.createElement('span');
-    const isUpdate = serverDocs.some(d => d.filename === name && d.status === 'indexed');
+    const isUpdate = store.state.serverDocs.some(d => d.filename === name && d.status === 'indexed');
     chip.className = 'doc-chip ' + (isUpdate ? 'updating' : 'indexing');
     chip.title = isUpdate ? `Updating ${name}…` : `${name} — indexing…`;
     const spin = document.createElement('span');
@@ -385,7 +269,7 @@ function renderTray() {
     docTray.appendChild(chip);
   });
 
-  stagedFiles.forEach((file, name) => {
+  store.state.stagedFiles.forEach((file, name) => {
     const chip = document.createElement('span');
     chip.className = 'doc-chip staged';
     chip.title = name;
@@ -396,14 +280,14 @@ function renderTray() {
     x.type = 'button';
     x.className = 'doc-x';
     x.setAttribute('aria-label', `Remove ${name}`);
-    x.textContent = '×';
-    x.addEventListener('click', () => { stagedFiles.delete(name); renderTray(); });
+    x.innerHTML = ICONS.close;
+    x.addEventListener('click', () => { store.state.stagedFiles.delete(name); renderTray(); });
     chip.append(label, x);
     docTray.appendChild(chip);
   });
 
-  serverDocs.forEach(doc => {
-    if (uploadingFiles.has(doc.filename) && doc.status === 'indexed') return;
+  store.state.serverDocs.forEach(doc => {
+    if (store.state.uploadingFiles.has(doc.filename) && doc.status === 'indexed') return;
     const chip = document.createElement('span');
     chip.className = 'doc-chip ' + (doc.status || 'indexed');
     chip.title = (doc.summary || '').trim() || doc.filename;
@@ -423,151 +307,129 @@ function renderTray() {
       retry.className = 'doc-retry';
       retry.setAttribute('aria-label', `Retry ${doc.filename}`);
       retry.title = 'Retry upload';
-      retry.textContent = '↻';
+      retry.innerHTML = ICONS.retry;
       retry.addEventListener('click', () => retryFailedDoc(doc));
-      const x = document.createElement('button');
-      x.type = 'button';
-      x.className = 'doc-x';
-      x.setAttribute('aria-label', `Remove ${doc.filename}`);
-      x.textContent = '×';
-      x.addEventListener('click', () => deleteServerDoc(doc.id));
-      chip.append(label, retry, x);
+      chip.append(label, retry);
     } else {
       const label = document.createElement('span');
       label.className = 'doc-name';
       label.textContent = shortFileName(doc.filename);
-      const x = document.createElement('button');
-      x.type = 'button';
-      x.className = 'doc-x';
-      x.setAttribute('aria-label', `Remove ${doc.filename}`);
-      x.textContent = '×';
-      x.addEventListener('click', () => deleteServerDoc(doc.id));
-      chip.append(label, x);
+      chip.append(label);
     }
     docTray.appendChild(chip);
   });
   const blocked = isIndexing();
   setComposerBlocked(blocked, blocked ? GATE_HINT : '');
-  renderFilesSidebar();
+  renderContextBar();
 }
 
 async function ensureConversationId() {
-  if (currentConversationId) return currentConversationId;
-  const r = await fetch(`${API_BASE}/api/conversations`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({})
-  });
-  if (!r.ok) throw new Error(`Could not create conversation: HTTP ${r.status}`);
-  const conv = await r.json();
-  currentConversationId = conv.id;
-  prevIndexedNames = new Set();
+  if (store.state.currentConversationId) return store.state.currentConversationId;
+  const id = await chatApi.ensureConversationId(store.state.currentConversationId);
+  store.set({ currentConversationId: id, prevIndexedNames: new Set() });
   await loadConversations();
   renderHistory();
-  return currentConversationId;
+  return store.state.currentConversationId;
 }
 
 async function loadServerDocs(conversationId) {
   if (!conversationId) {
-    serverDocs = [];
-    prevIndexedNames = new Set();
+    store.set({ serverDocs: [], prevIndexedNames: new Set() });
     renderTray();
+    renderContextBar();
     return;
   }
   try {
-    const r = await fetch(`${API_BASE}/api/documents?conversation_id=${encodeURIComponent(conversationId)}`);
-    if (!r.ok) throw new Error('failed');
-    serverDocs = await r.json();
-    prevIndexedNames = new Set(serverDocs.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename));
+    const docs = await chatApi.loadServerDocs(conversationId);
+    store.set({
+      serverDocs: docs,
+      prevIndexedNames: new Set(docs.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename))
+    });
   } catch {
-    serverDocs = [];
-    prevIndexedNames = new Set();
+    store.set({ serverDocs: [], prevIndexedNames: new Set() });
   }
   renderTray();
+  renderContextBar();
 }
 
 function startDocPoll() {
   stopDocPoll();
-  docPollStartedAt = Date.now();
-  docPollTimer = setInterval(pollDocs, DOC_POLL_MS);
+  store.set({ docPollStartedAt: Date.now(), docPollTimer: setInterval(pollDocs, DOC_POLL_MS) });
 }
 
 function stopDocPoll() {
-  if (docPollTimer) clearInterval(docPollTimer);
-  docPollTimer = null;
+  if (store.state.docPollTimer) clearInterval(store.state.docPollTimer);
+  store.set({ docPollTimer: null });
 }
 
 async function pollDocs() {
-  if (!currentConversationId) { stopDocPoll(); return; }
-  if (Date.now() - docPollStartedAt > DOC_POLL_MAX_MS) {
-    uploadingFiles.clear();
+  if (!store.state.currentConversationId) { stopDocPoll(); return; }
+  if (Date.now() - store.state.docPollStartedAt > DOC_POLL_MAX_MS) {
+    store.state.uploadingFiles.clear();
     stopDocPoll();
     renderTray();
+    renderContextBar();
     toast('Indexing timed out after 5 min', 'warning');
     return;
   }
   try {
-    const r = await fetch(`${API_BASE}/api/documents?conversation_id=${encodeURIComponent(currentConversationId)}`);
-    if (!r.ok) return;
-    const docs = await r.json();
-    serverDocs = docs;
-    uploadingFiles.forEach((info, name) => {
+    const docs = await chatApi.pollDocsOnce(store.state.currentConversationId);
+    store.set({ serverDocs: docs });
+    store.state.uploadingFiles.forEach((info, name) => {
       const match = docs.find(d => d.filename === name);
       if (!match) return;
-      if (match.id !== info.oldId) uploadingFiles.delete(name);
+      if (match.id !== info.oldId) store.state.uploadingFiles.delete(name);
     });
     const currIndexed = new Set(docs.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename));
-    docs.filter(d => (d.status || 'indexed') === 'indexed' && !prevIndexedNames.has(d.filename)).forEach(d => {
+    docs.filter(d => (d.status || 'indexed') === 'indexed' && !store.state.prevIndexedNames.has(d.filename)).forEach(d => {
       toast(`${d.filename} indexed`, 'success');
     });
-    docs.filter(d => d.status === 'failed' && !prevIndexedNames.has(d.filename)).forEach(d => {
+    docs.filter(d => d.status === 'failed' && !store.state.prevIndexedNames.has(d.filename)).forEach(d => {
       toast(`${d.filename} failed — retry`, 'error');
     });
-    prevIndexedNames = currIndexed;
+    store.set({ prevIndexedNames: currIndexed });
     const stillIndexing = docs.some(d => d.status === 'pending' || d.status === 'indexing');
     const hasFailed = docs.some(d => d.status === 'failed');
-    if (!uploadingFiles.size && !stillIndexing) stopDocPoll();
+    if (!store.state.uploadingFiles.size && !stillIndexing) stopDocPoll();
     renderTray();
-    if (hasFailed && !uploadingFiles.size && !stillIndexing) setComposerBlocked(false);
+    renderContextBar();
+    if (hasFailed && !store.state.uploadingFiles.size && !stillIndexing) setComposerBlocked(false);
   } catch {}
 }
 
 async function uploadStaged(conversationId) {
-  if (!stagedFiles.size) return;
-  const entries = [...stagedFiles.entries()];
-  stagedFiles.clear();
-  const byName = new Map(serverDocs.map(d => [d.filename, d.id]));
+  if (!store.state.stagedFiles.size) return;
+  const entries = [...store.state.stagedFiles.entries()];
+  store.state.stagedFiles.clear();
+  const byName = new Map(store.state.serverDocs.map(d => [d.filename, d.id]));
   for (const [name, file] of entries) {
     const oldId = byName.get(name) || null;
-    uploadingFiles.set(name, { file, queueDepth: 0, startTime: Date.now(), oldId });
+    store.state.uploadingFiles.set(name, { file, queueDepth: 0, startTime: Date.now(), oldId });
   }
   renderTray();
   startDocPoll();
   for (const [name, file] of entries) {
     try {
-      const form = new FormData();
-      form.append('file', file, file.name);
-      form.append('conversation_id', conversationId);
-      const r = await fetch(`${API_BASE}/api/ingest`, { method: 'POST', body: form });
-      if (!r.ok) {
-        const info = uploadingFiles.get(name);
-        if (info) {
-          uploadingFiles.delete(name);
-          serverDocs = [{ id: `local-failed-${Date.now()}`, filename: name, status: 'failed', summary: `Upload failed: HTTP ${r.status}`, conversation_id: conversationId }, ...serverDocs];
-          toast(`Upload failed: ${name} (HTTP ${r.status})`, 'error');
-        }
-        continue;
-      }
-      const data = await r.json().catch(() => ({}));
-      const info = uploadingFiles.get(name);
+      const data = await chatApi.uploadFiles(conversationId, file);
+      const info = store.state.uploadingFiles.get(name);
       if (info && typeof data.queue_depth === 'number') {
         info.queueDepth = data.queue_depth;
         if (data.queue_depth > 0) toast(`+${data.queue_depth} ahead in queue`, 'info');
       }
       renderTray();
-    } catch {
-      uploadingFiles.delete(name);
-      toast(`Upload failed: ${name}`, 'error');
+    } catch (e) {
+      if (e && typeof e.status === 'number') {
+        const info = store.state.uploadingFiles.get(name);
+        if (info) {
+          store.state.uploadingFiles.delete(name);
+          store.set({ serverDocs: [{ id: `local-failed-${Date.now()}`, filename: name, status: 'failed', summary: `Upload failed: HTTP ${e.status}`, conversation_id: conversationId }, ...store.state.serverDocs] });
+          toast(`Upload failed: ${name} (HTTP ${e.status})`, 'error');
+        }
+      } else {
+        store.state.uploadingFiles.delete(name);
+        toast(`Upload failed: ${name}`, 'error');
+      }
+      continue;
     }
   }
   renderTray();
@@ -576,18 +438,20 @@ async function uploadStaged(conversationId) {
 
 async function uploadFilesNow(files) {
   await ensureConversationId();
-  files.forEach(f => stagedFiles.set(f.name, f));
+  files.forEach(f => store.state.stagedFiles.set(f.name, f));
   renderTray();
-  await uploadStaged(currentConversationId);
+  await uploadStaged(store.state.currentConversationId);
 }
 
 async function deleteServerDoc(documentId) {
   try {
-    const r = await fetch(`${API_BASE}/api/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const gone = serverDocs.find(d => String(d.id) === String(documentId));
-    serverDocs = serverDocs.filter(d => String(d.id) !== String(documentId));
-    prevIndexedNames = new Set(serverDocs.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename));
+    await chatApi.deleteServerDoc(documentId);
+    const gone = store.state.serverDocs.find(d => String(d.id) === String(documentId));
+    const next = store.state.serverDocs.filter(d => String(d.id) !== String(documentId));
+    store.set({
+      serverDocs: next,
+      prevIndexedNames: new Set(next.filter(d => (d.status || 'indexed') === 'indexed').map(d => d.filename))
+    });
     if (gone) toast(`Deleted ${gone.filename}`, 'success');
     renderTray();
   } catch (e) {
@@ -596,16 +460,16 @@ async function deleteServerDoc(documentId) {
 }
 
 async function retryFailedDoc(doc) {
-  const cached = uploadingFiles.get(doc.filename);
+  const cached = store.state.uploadingFiles.get(doc.filename);
   const file = cached ? cached.file : null;
   try {
-    await fetch(`${API_BASE}/api/documents/${encodeURIComponent(doc.id)}`, { method: 'DELETE' });
+    await chatApi.deleteServerDoc(doc.id);
   } catch {}
-  serverDocs = serverDocs.filter(d => String(d.id) !== String(doc.id));
-  if (file && currentConversationId) {
-    stagedFiles.set(file.name, file);
+  store.set({ serverDocs: store.state.serverDocs.filter(d => String(d.id) !== String(doc.id)) });
+  if (file && store.state.currentConversationId) {
+    store.state.stagedFiles.set(file.name, file);
     renderTray();
-    uploadStaged(currentConversationId);
+    uploadStaged(store.state.currentConversationId);
   } else {
     renderTray();
     if (fileInput) fileInput.click();
@@ -613,38 +477,29 @@ async function retryFailedDoc(doc) {
 }
 
 async function checkModelHealth() {
-  try {
-    const r = await fetch(`${API_BASE}/api/health`, { headers: { 'accept': 'application/json' } });
-    if (!r.ok) return false;
-    const data = await r.json();
-    // dynamic: idle = GGUF exists but not yet mmap-loaded — lazy loads on first chat, still healthy
-    return (data.status === 'ready' || data.status === 'idle') && !!data.exists;
-  } catch { return false; }
+  return chatApi.checkModelHealth();
 }
 
 async function fetchModels(forcedHealthy = null) {
   let healthy = forcedHealthy;
   try {
-    const r = await fetch(`${API_BASE}/api/models`, { headers: { 'accept': 'application/json' } });
-    if (!r.ok) throw new Error('no models');
-    const data = await r.json();
-    const models = (data.models || []).map(m => typeof m === 'string' ? { name: m, path: m } : m);
+    const { models, path } = await chatApi.fetchModels();
     if (healthy === null) healthy = await checkModelHealth();
     if (models.length) {
       setStatus(healthy, healthy ? 'MODEL READY' : 'MODEL OFFLINE');
       renderModelMenu(models);
-      if (!selectedModel) selectedModel = models[0];
-      const first = parseModel(selectedModel.name || selectedModel);
+      if (!store.state.selectedModel) store.set({ selectedModel: models[0] });
+      const first = parseModel(store.state.selectedModel.name || store.state.selectedModel);
       modelNameEl.textContent = first.base;
       const pq = document.getElementById('modelQuant');
       if (pq) { pq.textContent = first.quant; pq.hidden = !first.quant; }
       hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
       updateHintVisibility();
       setModelPillDisabled(!healthy);
-      if (!healthy) { const f2 = parseModel(selectedModel.name || selectedModel); modelNameEl.textContent = f2.base; }
+      if (!healthy) { const f2 = parseModel(store.state.selectedModel.name || store.state.selectedModel); modelNameEl.textContent = f2.base; }
       return healthy;
     }
-    setStatus(healthy, healthy ? 'no models — add GGUF to ' + (data.path || '~/.yourstrulyai/models') : 'MODEL OFFLINE');
+    setStatus(healthy, healthy ? 'no models — add GGUF to ' + (path || '~/.yourstrulyai/models') : 'MODEL OFFLINE');
     hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
     updateHintVisibility();
     setModelPillDisabled(true);
@@ -661,30 +516,19 @@ async function fetchModels(forcedHealthy = null) {
   }
 }
 
-function parseModel(raw) {
-  if (!raw) return { base: '', quant: '' };
-  const baseRaw = raw.replace(/\.gguf$/i, '').trim();
-  const m = baseRaw.match(/^(.*?)[-_](Q\d.*)$/i);
-  if (m) return { base: m[1], quant: m[2] };
-  return { base: baseRaw.replace(/_/g, ' '), quant: '' };
-}
-function displayName(raw) {
-  const p = parseModel(raw);
-  return p.quant ? `${p.base} (${p.quant})` : p.base;
-}
 function renderModelMenu(models) {
   modelMenu.innerHTML = '';
   models.forEach(m => {
     const name = m.name || m;
     const path = m.path || m;
-    const isSame = selectedModel && (selectedModel.path === path || selectedModel === m);
+    const isSame = store.state.selectedModel && (store.state.selectedModel.path === path || store.state.selectedModel === m);
     const div = document.createElement('button');
     div.setAttribute('role', 'menuitem');
     div.className = 'model-option ghost' + (isSame ? ' active' : '');
     const p = parseModel(name);
     div.innerHTML = `<span class="model-name" title="${escapeHtml(name)}">${escapeHtml(p.base)}</span>${p.quant ? `<small class="model-quant">${escapeHtml(p.quant)}</small>` : ''}`;
     div.addEventListener('click', () => {
-      selectedModel = m;
+      store.set({ selectedModel: m });
       modelNameEl.textContent = p.base;
       const pillQuant = document.getElementById('modelQuant');
       if (pillQuant) pillQuant.textContent = p.quant;
@@ -697,28 +541,22 @@ function renderModelMenu(models) {
   });
 }
 
-function truncateTitle(title, maxLen = 32) {
-  const t = title.trim();
-  return t.length > maxLen ? t.slice(0, maxLen) + '…' : t;
-}
-
 function closeHistoryMenu() {
-  openHistoryMenuId = null;
+  store.set({ openHistoryMenuId: null });
   document.querySelectorAll('.history-item.menu-open').forEach(el => el.classList.remove('menu-open'));
   document.querySelectorAll('.history-menu').forEach(el => el.hidden = true);
 }
 
 function startHistoryRename(id) {
-  if (isStreaming) return;
-  renamingId = id;
-  openHistoryMenuId = null;
+  if (store.state.isStreaming) return;
+  store.set({ renamingId: id, openHistoryMenuId: null });
   renderHistory();
   const input = historyList.querySelector(`[data-rename-input="${id}"]`);
   if (input) { input.focus(); input.select(); }
 }
 
 function cancelHistoryRename() {
-  renamingId = null;
+  store.set({ renamingId: null });
   renderHistory();
 }
 
@@ -736,25 +574,16 @@ async function saveHistoryRename(id) {
     input.focus();
     return;
   }
-  const prev = conversations.find(x => x.id === id);
+  const prev = store.state.conversations.find(x => x.id === id);
   const prevTitle = prev ? prev.title : '';
   if (raw === prevTitle) { cancelHistoryRename(); return; }
   input.disabled = true;
   try {
-    const r = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title: raw })
-    });
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      throw new Error(d.detail || `HTTP ${r.status}`);
-    }
-    const updated = await r.json();
-    const idx = conversations.findIndex(x => x.id === id);
-    if (idx !== -1) conversations[idx].title = updated.title;
-    if (conversations[idx]) conversations[idx].updated_at = updated.updated_at;
-    renamingId = null;
+    const updated = await chatApi.saveRename(id, raw);
+    const idx = store.state.conversations.findIndex(x => x.id === id);
+    if (idx !== -1) store.state.conversations[idx].title = updated.title;
+    if (store.state.conversations[idx]) store.state.conversations[idx].updated_at = updated.updated_at;
+    store.set({ renamingId: null });
     await loadConversations();
   } catch (e) {
     input.disabled = false;
@@ -765,23 +594,22 @@ async function saveHistoryRename(id) {
 }
 
 async function deleteHistoryConversation(id) {
-  if (isStreaming) return;
+  if (store.state.isStreaming) return;
   try {
-    const r = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      throw new Error(d.detail || `HTTP ${r.status}`);
-    }
-    conversations = conversations.filter(x => x.id !== id);
-    if (currentConversationId === id) {
-      currentConversationId = null;
-      serverDocs = [];
-      stagedFiles.clear();
-      uploadingFiles.clear();
-      prevIndexedNames = new Set();
-      filesEverIndexed = false;
+    await chatApi.deleteConversation(id);
+    store.set({ conversations: store.state.conversations.filter(x => x.id !== id) });
+    if (store.state.currentConversationId === id) {
+      store.set({
+        currentConversationId: null,
+        serverDocs: [],
+        prevIndexedNames: new Set()
+      });
+      store.state.stagedFiles.clear();
+      store.state.uploadingFiles.clear();
+
       stopDocPoll();
       renderTray();
+      renderContextBar();
       clearThread();
       showEmpty(true);
       ttftEl.textContent = '';
@@ -793,20 +621,20 @@ async function deleteHistoryConversation(id) {
   } catch (e) {
     console.error(e);
   } finally {
-    pendingHistoryDeleteId = null;
+    store.set({ pendingHistoryDeleteId: null });
   }
 }
 
 function renderHistory() {
-  if (!conversations.length) {
+  if (!store.state.conversations.length) {
     historyList.innerHTML = `<div class="empty-hint">No conversations yet.</div>`;
     return;
   }
   historyList.innerHTML = '';
-  conversations.forEach(c => {
-    const isActive = c.id === currentConversationId;
-    const isRenaming = renamingId === c.id;
-    const isMenuOpen = openHistoryMenuId === c.id;
+  store.state.conversations.forEach(c => {
+    const isActive = c.id === store.state.currentConversationId;
+    const isRenaming = store.state.renamingId === c.id;
+    const isMenuOpen = store.state.openHistoryMenuId === c.id;
     const div = document.createElement('div');
     div.className = 'history-item' + (isActive ? ' active' : '') + (isMenuOpen ? ' menu-open' : '');
     div.dataset.id = c.id;
@@ -838,7 +666,7 @@ function renderHistory() {
       titleEl.title = c.title;
       titleEl.textContent = short;
       // double-click to rename
-      titleEl.addEventListener('dblclick', e => { e.stopPropagation(); if (!isStreaming) startHistoryRename(c.id); });
+      titleEl.addEventListener('dblclick', e => { e.stopPropagation(); if (!store.state.isStreaming) startHistoryRename(c.id); });
       div.appendChild(titleEl);
 
       const menuBtn = document.createElement('button');
@@ -847,13 +675,14 @@ function renderHistory() {
       menuBtn.setAttribute('aria-label', 'Conversation menu');
       menuBtn.setAttribute('aria-haspopup', 'true');
       menuBtn.setAttribute('aria-expanded', isMenuOpen ? 'true' : 'false');
+      menuBtn.innerHTML = '';
       menuBtn.textContent = '⋮';
-      menuBtn.disabled = isStreaming;
+      menuBtn.disabled = store.state.isStreaming;
       menuBtn.addEventListener('click', e => {
         e.stopPropagation();
-        if (isStreaming) return;
-        if (openHistoryMenuId === c.id) closeHistoryMenu();
-        else { closeHistoryMenu(); openHistoryMenuId = c.id; renderHistory(); }
+        if (store.state.isStreaming) return;
+        if (store.state.openHistoryMenuId === c.id) closeHistoryMenu();
+        else { closeHistoryMenu(); store.set({ openHistoryMenuId: c.id }); renderHistory(); }
       });
       div.appendChild(menuBtn);
 
@@ -879,7 +708,7 @@ function renderHistory() {
       delBtn.addEventListener('click', e => {
         e.stopPropagation();
         closeHistoryMenu();
-        pendingHistoryDeleteId = c.id;
+        store.set({ pendingHistoryDeleteId: c.id });
         if (historyDeleteModal && typeof historyDeleteModal.showModal === 'function') {
           try { historyDeleteModal.showModal(); } catch {}
         } else if (historyDeleteModal) historyDeleteModal.setAttribute('open','');
@@ -888,19 +717,20 @@ function renderHistory() {
       div.appendChild(menu);
 
       div.addEventListener('click', () => {
-        if (isStreaming) return;
-        if (renamingId) return;
-        if (openHistoryMenuId) { closeHistoryMenu(); }
-        if (currentConversationId === c.id) return;
-        currentConversationId = c.id;
-        stagedFiles.clear();
-        uploadingFiles.clear();
-        prevIndexedNames = new Set();
-        filesEverIndexed = false;
+        if (store.state.isStreaming) return;
+        if (store.state.renamingId) return;
+        if (store.state.openHistoryMenuId) { closeHistoryMenu(); }
+        if (store.state.currentConversationId === c.id) return;
+        store.set({ currentConversationId: c.id });
+        store.state.stagedFiles.clear();
+        store.state.uploadingFiles.clear();
+        store.set({ prevIndexedNames: new Set() });
+
         stopDocPoll();
         setRoutePill(null);
         setComposerBlocked(false);
         ttftEl.textContent = '';
+        renderContextBar();
         renderHistory();
         loadMessages(c.id);
       });
@@ -908,8 +738,8 @@ function renderHistory() {
     historyList.appendChild(div);
   });
   // dynamic placement: flip to open-up if not enough space below
-  if (openHistoryMenuId) {
-    const openItem = historyList.querySelector(`.history-item[data-id="${openHistoryMenuId}"]`);
+  if (store.state.openHistoryMenuId) {
+    const openItem = historyList.querySelector(`.history-item[data-id="${store.state.openHistoryMenuId}"]`);
     const openMenu = openItem ? openItem.querySelector('.history-menu') : null;
     if (openItem && openMenu && !openMenu.hidden) {
       const rect = openItem.getBoundingClientRect();
@@ -923,22 +753,18 @@ function renderHistory() {
 
 async function loadConversations() {
   try {
-    const r = await fetch(`${API_BASE}/api/conversations`);
-    if (!r.ok) throw new Error('failed');
-    const data = await r.json();
-    conversations = Array.isArray(data) ? data : [];
+    const data = await chatApi.loadConversations();
+    store.set({ conversations: data });
     renderHistory();
   } catch {
     // keep empty hint, don't block
-    if (!conversations.length) renderHistory();
+    if (!store.state.conversations.length) renderHistory();
   }
 }
 
 async function loadMessages(conversationId) {
   try {
-    const r = await fetch(`${API_BASE}/api/conversations/${conversationId}/messages`);
-    if (!r.ok) throw new Error('failed');
-    const msgs = await r.json();
+    const msgs = await chatApi.loadMessages(conversationId);
     clearThread();
     setRoutePill(null);
     ttftEl.textContent = '';
@@ -959,20 +785,20 @@ async function loadMessages(conversationId) {
 
 async function send() {
   const query = input.value.trim();
-  const hasStaged = stagedFiles.size > 0;
-  if ((!query && !hasStaged) || isStreaming) return;
-  if (composerBlocked || isIndexing()) {
+  const hasStaged = store.state.stagedFiles.size > 0;
+  if ((!query && !hasStaged) || store.state.isStreaming) return;
+  if (store.state.composerBlocked || isIndexing()) {
     toast('Indexing docs… chat paused — ask after Indexed', 'warning');
     setComposerBlocked(true, GATE_HINT);
     return;
   }
-  const isFirst = !currentConversationId && thread.querySelectorAll('.msg').length === 0;
+  const isFirst = !store.state.currentConversationId && thread.querySelectorAll('.msg').length === 0;
   if (isFirst) {
     tracePath.classList.remove('animate');
     void tracePath.getBoundingClientRect();
     tracePath.classList.add('animate');
   }
-  isStreaming = true;
+  store.set({ isStreaming: true });
   closeHistoryMenu();
   sendBtn.disabled = true;
   ttftEl.textContent = '';
@@ -981,7 +807,7 @@ async function send() {
   if (!query && hasStaged) {
     try {
       await ensureConversationId();
-      const cid = currentConversationId;
+      const cid = store.state.currentConversationId;
       input.value = '';
       autoResize();
       await uploadStaged(cid);
@@ -990,38 +816,36 @@ async function send() {
     } catch (e) {
       console.error(e);
     } finally {
-      isStreaming = false;
+      store.set({ isStreaming: false });
       sendBtn.disabled = false;
       input.focus();
     }
     return;
   }
 
-  const attachedNames = [...stagedFiles.keys()];
+  const attachedNames = [...store.state.stagedFiles.keys()];
   addMessage('user', query, { files: attachedNames });
   input.value = '';
   autoResize();
 
   const { card, statusEl } = addMessage('assistant', '', { streaming: true });
+  setRagStatus(statusEl, 'deciding');
+  updateAssistantCard(card, '', false);
   let acc = '';
   let start = performance.now();
   let ttftDone = false;
 
   try {
     await ensureConversationId();
-    if (attachedNames.length) await uploadStaged(currentConversationId);
+    if (attachedNames.length) await uploadStaged(store.state.currentConversationId);
 
-    const modelPath = selectedModel ? (selectedModel.path || selectedModel) : undefined;
-    const payload = { query, model: modelPath || undefined };
-    if (currentConversationId) payload.conversation_id = currentConversationId;
-    const resp = await fetch(`${API_BASE}/api/chat/stream`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload)
+    const modelPath = store.state.selectedModel ? (store.state.selectedModel.path || store.state.selectedModel) : undefined;
+    const { resp, conversationId: newId, route: routeHeader, ttft: ttftHeader } = await chatApi.chatStream({
+      query,
+      model: modelPath || undefined,
+      conversationId: store.state.currentConversationId
     });
-    const newId = resp.headers.get('X-Conversation-Id') || resp.headers.get('x-conversation-id');
-    if (newId) currentConversationId = newId;
-    const routeHeader = resp.headers.get('X-Route') || resp.headers.get('x-route');
+    if (newId) store.set({ currentConversationId: newId });
     if (routeHeader) setRoutePill(routeHeader);
     if (!resp.ok) {
       const t = await resp.text();
@@ -1031,7 +855,6 @@ async function send() {
       }
       throw new Error(`HTTP ${resp.status}: ${t}`);
     }
-    const ttftHeader = resp.headers.get('X-TTFT') || resp.headers.get('x-ttft');
     if (ttftHeader) ttftEl.textContent = `TTFT ${Number(ttftHeader).toFixed(0)} ms`;
 
     const reader = resp.body.getReader();
@@ -1045,24 +868,15 @@ async function send() {
       buf = parts.pop();
       for (const chunk of parts) {
         const lines = chunk.split('\n').map(l => l.trim()).filter(Boolean);
-        let event = null;
         let data = null;
         for (const ln of lines) {
-          if (ln.startsWith('event:')) event = ln.slice(6).trim();
-          else if (ln.startsWith('data:')) data = ln.slice(5).trim();
+          if (ln.startsWith('data:')) data = ln.slice(5).trim();
         }
         if (data === null || data === '') continue;
-        if (event === 'stage') {
-          try {
-            const j = JSON.parse(data);
-            if (j.stage) setRagStatus(statusEl, j.stage);
-          } catch {}
-          continue;
-        }
         if (data === '[DONE]') {
-          if (statusEl) { statusEl.hidden = true; statusEl.textContent = ''; }
+          stopTicker(statusEl);
           updateAssistantCard(card, acc, true);
-          isStreaming = false;
+          store.set({ isStreaming: false });
           sendBtn.disabled = false;
           if (!ttftDone && !ttftHeader) {
             const ms = performance.now() - start;
@@ -1074,11 +888,11 @@ async function send() {
         }
         try {
           const j = JSON.parse(data);
-          if (j.stage && !j.content) { setRagStatus(statusEl, j.stage); continue; }
           const delta = j.content || '';
           if (delta) {
             if (!ttftDone) {
               ttftDone = true;
+              stopTicker(statusEl);
               const ms = performance.now() - start;
               if (!ttftHeader) ttftEl.textContent = `TTFT ${ms.toFixed(0)} ms`;
             }
@@ -1088,17 +902,18 @@ async function send() {
         } catch {}
       }
     }
-    if (statusEl) { statusEl.hidden = true; statusEl.textContent = ''; }
+    stopTicker(statusEl);
     updateAssistantCard(card, acc || 'No response.', true);
     await loadConversations();
   } catch (e) {
-    if (statusEl) { statusEl.hidden = true; statusEl.textContent = ''; }
+    stopTicker(statusEl);
     const m = e && e.message || '';
     const isBusy = m.includes('429') || m.includes('System Busy');
     const msg = isBusy ? '**System Busy — model is generating.** Please wait and try again.' : '**Could not reach backend / model not loaded.** Check ~/.yourstrulyai/models and backend logs.';
     updateAssistantCard(card, msg, true);
   } finally {
-    isStreaming = false;
+    stopTicker(statusEl);
+    store.set({ isStreaming: false });
     if (isIndexing()) setComposerBlocked(true, GATE_HINT);
     else { setComposerBlocked(false); sendBtn.disabled = false; }
     input.focus();
@@ -1112,39 +927,39 @@ document.addEventListener('click', (e) => {
   const insideItem = e.target.closest('.history-item');
   if (!insideItem) {
     closeHistoryMenu();
-    if (renamingId) {
-      const input = historyList.querySelector(`[data-rename-input="${renamingId}"]`);
+    if (store.state.renamingId) {
+      const input = historyList.querySelector(`[data-rename-input="${store.state.renamingId}"]`);
       const raw = input ? input.value.trim() : '';
-      const orig = conversations.find(x => x.id === renamingId);
+      const orig = store.state.conversations.find(x => x.id === store.state.renamingId);
       const origTitle = orig ? orig.title : '';
-      if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(renamingId);
+      if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(store.state.renamingId);
       else cancelHistoryRename();
     }
     return;
   }
   // click inside another item while renaming — treat as outside save
-  if (renamingId && insideItem.dataset.id !== renamingId) {
-    const input = historyList.querySelector(`[data-rename-input="${renamingId}"]`);
+  if (store.state.renamingId && insideItem.dataset.id !== String(store.state.renamingId)) {
+    const input = historyList.querySelector(`[data-rename-input="${store.state.renamingId}"]`);
     const raw = input ? input.value.trim() : '';
-    const orig = conversations.find(x => x.id === renamingId);
+    const orig = store.state.conversations.find(x => x.id === store.state.renamingId);
     const origTitle = orig ? orig.title : '';
-    if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(renamingId);
+    if (raw && raw !== origTitle && raw.length <= 250) saveHistoryRename(store.state.renamingId);
     else cancelHistoryRename();
   }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (renamingId) { e.preventDefault(); cancelHistoryRename(); }
-  else if (openHistoryMenuId) { e.preventDefault(); closeHistoryMenu(); renderHistory(); }
+  if (store.state.renamingId) { e.preventDefault(); cancelHistoryRename(); }
+  else if (store.state.openHistoryMenuId) { e.preventDefault(); closeHistoryMenu(); renderHistory(); }
 });
 if (historyDeleteCancel) historyDeleteCancel.addEventListener('click', () => {
-  pendingHistoryDeleteId = null;
+  store.set({ pendingHistoryDeleteId: null });
   if (historyDeleteModal && typeof historyDeleteModal.close === 'function') try { historyDeleteModal.close(); } catch {}
   if (historyDeleteModal) historyDeleteModal.removeAttribute('open');
 });
 if (historyDeleteConfirm) historyDeleteConfirm.addEventListener('click', async (e) => {
   e.preventDefault();
-  const id = pendingHistoryDeleteId;
+  const id = store.state.pendingHistoryDeleteId;
   if (!id) return;
   if (historyDeleteModal && typeof historyDeleteModal.close === 'function') try { historyDeleteModal.close(); } catch {}
   if (historyDeleteModal) historyDeleteModal.removeAttribute('open');
@@ -1153,14 +968,14 @@ if (historyDeleteConfirm) historyDeleteConfirm.addEventListener('click', async (
 if (historyDeleteModal) {
   historyDeleteModal.addEventListener('click', (e) => {
     if (e.target === historyDeleteModal) {
-      pendingHistoryDeleteId = null;
+      store.set({ pendingHistoryDeleteId: null });
       try { historyDeleteModal.close(); } catch {}
       historyDeleteModal.removeAttribute('open');
     }
   });
   historyDeleteModal.addEventListener('cancel', (e) => {
     e.preventDefault();
-    pendingHistoryDeleteId = null;
+    store.set({ pendingHistoryDeleteId: null });
     try { historyDeleteModal.close(); } catch {}
   });
 }
@@ -1174,12 +989,13 @@ input.addEventListener('keydown', (e) => {
 });
 composer.addEventListener('submit', (e) => { e.preventDefault(); send(); });
 sendBtn.addEventListener('click', (e) => { e.preventDefault(); send(); });
-if (filesToggle) {
-  filesToggle.addEventListener('click', (e) => {
+if (contextToggle) {
+  try { store.state.contextCollapsed = localStorage.getItem('yt_context_collapsed') === '1'; } catch {}
+  contextToggle.addEventListener('click', (e) => {
     e.preventDefault();
-    if (!hasIndexedDocs()) return;
-    if (document.body.hasAttribute('data-files-open')) document.body.removeAttribute('data-files-open');
-    else document.body.setAttribute('data-files-open', '');
+    store.set({ contextCollapsed: !store.state.contextCollapsed });
+    try { localStorage.setItem('yt_context_collapsed', store.state.contextCollapsed ? '1' : '0'); } catch {}
+    renderContextBar();
   });
 }
 if (attachBtn && fileInput) {
@@ -1205,14 +1021,13 @@ if (attachBtn && fileInput) {
   });
 }
 $('#newChat').addEventListener('click', async () => {
-  currentConversationId = null;
-  serverDocs = [];
-  stagedFiles.clear();
-  uploadingFiles.clear();
-  prevIndexedNames = new Set();
-  filesEverIndexed = false;
+  store.set({ currentConversationId: null, serverDocs: [], prevIndexedNames: new Set() });
+  store.state.stagedFiles.clear();
+  store.state.uploadingFiles.clear();
+
   stopDocPoll();
   renderTray();
+  renderContextBar();
   clearThread();
   showEmpty(true);
   ttftEl.textContent = '';
@@ -1265,8 +1080,8 @@ window.addEventListener('focus', pollHealth);
   const h = await fetchModels();
   lastHealthy = h;
   autoResize();
-  if (!currentConversationId) showEmpty(true);
-  else loadServerDocs(currentConversationId);
+  if (!store.state.currentConversationId) showEmpty(true);
+  else loadServerDocs(store.state.currentConversationId);
   updateHintVisibility();
   setInterval(pollHealth, 10000);
 })();

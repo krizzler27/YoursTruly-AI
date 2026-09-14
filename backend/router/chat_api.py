@@ -47,7 +47,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         outcome = await asyncio.to_thread(
             chat_service.run_agentic, request.query, history_prev, conversation.id
         )
-        messages, route, stages = outcome["messages"], outcome["route"], outcome.get("stages", [])
+        messages, route = outcome["messages"], outcome["route"]
 
         stream = llm.astream_chat(
             messages=messages,
@@ -82,9 +82,6 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
             acc_parts.append(first_delta)
 
         async def sse_wrap():
-            for stage in stages:
-                yield f"event: stage\ndata: {json.dumps({'stage': stage})}\n\n"
-
             if first_delta:
                 yield f"data: {json.dumps({'content': first_delta})}\n\n"
 

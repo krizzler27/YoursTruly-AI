@@ -1,0 +1,9 @@
+export const ICONS = {
+  close: '<svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  check: '<svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5"/></svg>',
+  retry: '<svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 11-2.3-5.6M20 3v5h-5"/></svg>',
+  info: '<svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 8h.01M12 11v6"/></svg>',
+  warn: '<svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 4L2.5 20h19L12 4zM12 10v5M12 17.5h.01"/></svg>',
+  kebab: '<svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2.1"/><circle cx="12" cy="12" r="2.1"/><circle cx="12" cy="19" r="2.1"/></svg>',
+  upload: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 20.8201C15.426 22.392 8.574 22.392 2 20.8201"/><path d="M12.0508 16V2"/><path d="M7.09961 6.21997L10.6096 2.60986C10.7895 2.42449 11.0048 2.27715 11.2427 2.17651C11.4806 2.07588 11.7363 2.02417 11.9946 2.02417C12.2529 2.02417 12.5086 2.07588 12.7465 2.17651C12.9844 2.27715 13.1997 2.42449 13.3796 2.60986L16.8996 6.21997"/></svg>'
+};

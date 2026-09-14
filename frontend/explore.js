@@ -1,5 +1,5 @@
-const API_BASE = 'http://127.0.0.1:8000';
-const $ = (s, r=document) => r.querySelector(s);
+import { API_BASE } from './js/shared/config.js';
+import { $, escapeHtml as esc } from './js/shared/utils.js';
 
 const hwDot = $('#hwDot');
 const hwStatus = $('#hwStatus');
@@ -126,7 +126,6 @@ function toast(msg, type='info', ttl){
   el.addEventListener('mouseenter', ()=> clearTimeout(t));
   el.addEventListener('mouseleave', ()=> t=setTimeout(dismiss, 1200));
 }
-function esc(s){ return s.replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
 function formatProvidersLabel(set){

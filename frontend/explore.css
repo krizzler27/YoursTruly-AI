@@ -19,37 +19,44 @@
   -webkit-font-smoothing: antialiased;
 }
 [hidden] { display:none !important; }
-/* Topnav */
-.explore-topnav {
-  height: 52px;
-  display:flex; align-items:center; gap:18px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--lab-border);
-  background: color-mix(in srgb, var(--lab-paper) 96%, white);
+/* Unified topnav — SAME structure/look as chat (theme tokens, 48px, Newsreader).
+   Lab palette stays ONLY for panels/cards/dock below the header. */
+[data-topnav] {
+  height: 48px;
+  display:flex; align-items:center; gap:16px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--paper) 92%, white);
   position: sticky; top: 0; z-index: 10;
   backdrop-filter: blur(8px);
+  font-size: 13px;
 }
-.explore-topnav .brand {
+[data-topnav] .brand {
   display:flex; align-items:center; gap:10px;
-  font-family: 'Sora', sans-serif; font-weight:700; letter-spacing:-0.02em;
-  text-decoration:none; color:var(--lab-chassis);
+  font-family: 'Newsreader', Georgia, serif; font-weight:600; font-size:17px; letter-spacing:-0.02em;
+  text-decoration:none; color:var(--ink);
 }
-.explore-topnav .brand-mark { width:24px;height:24px; background:var(--lab-chassis); color:var(--lab-paper); display:grid; place-items:center; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px;}
-.explore-topnav .brand-sub { font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--lab-zinc); margin-left:4px; }
-.topnav-links { display:flex; gap:12px; margin-left:8px; }
-.topnav-links a { font-family:'Instrument Sans',sans-serif; font-size:13px; color:var(--lab-chassis); text-decoration:none; padding:6px 10px; border-radius:8px; border:1px solid transparent; }
-.topnav-links a[aria-current="page"] { background:var(--lab-chassis); color:var(--lab-paper); }
-.topnav-links a:focus-visible { outline:2px solid var(--lab-ember); outline-offset:2px; }
-.topnav-status { margin-left:auto; display:flex; align-items:center; gap:8px; font-size:11px; color:var(--lab-zinc); }
-.hw-dot { width:8px;height:8px;border-radius:999px;background:var(--lab-moss); box-shadow:0 0 0 4px color-mix(in srgb, var(--lab-moss) 18%, transparent); }
-.hw-dot.off { background:var(--lab-zinc); box-shadow:none; }
+[data-topnav] .brand-mark { width:24px;height:24px; background:var(--ink); color:var(--paper); display:grid; place-items:center; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:500; }
+[data-topnav] a.button {
+  display:inline-flex; align-items:center;
+  font-family:'Instrument Sans',sans-serif; font-size:13px; font-weight:500;
+  color:var(--ink); text-decoration:none;
+  padding:6px 12px; border-radius:8px;
+  border:1px solid var(--border);
+  background: transparent;
+}
+[data-topnav] a.button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+[data-topnav] a.button[aria-current="page"] { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+[data-topnav] a.button:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
+/* hwDot/hwStatus keep ids for explore.js; shared look comes from theme .status-dot/.mono */
+#hwDot.off { background: var(--danger); }
 
 /* Tabs — Explore is center */
 .tab-bar-wrap {
   display:flex; justify-content:center;
   padding:12px 18px 0;
   background: var(--lab-paper);
-  position: sticky; top:52px; z-index:9;
+  position: sticky; top:48px; z-index:9;
 }
 .tab-bar {
   display:inline-flex; gap:4px; align-items:center;

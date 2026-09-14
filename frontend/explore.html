@@ -13,21 +13,18 @@
   <link rel="stylesheet" href="./explore.css">
 </head>
 <body class="explore">
-  <nav class="explore-topnav" aria-label="Primary">
+  <nav data-topnav aria-label="Primary">
     <a class="brand" href="./index.html">
       <span class="brand-mark">YT</span>
       YoursTruly AI
-      <span class="brand-sub">Lab</span>
     </a>
-    <div class="topnav-links" role="tablist">
-      <a href="./index.html">Chat</a>
-      <a href="./explore.html" aria-current="page">Explore</a>
-      <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">API</a>
+    <div style="flex:1"></div>
+    <div class="hstack" style="gap:8px; align-items:center">
+      <span class="status-dot" id="hwDot" aria-hidden="true"></span>
+      <span class="mono" id="hwStatus" style="font-size:11px; color:var(--muted-foreground)">probing hardware…</span>
     </div>
-    <div class="topnav-status">
-      <span class="hw-dot" id="hwDot" aria-hidden="true"></span>
-      <span class="mono" id="hwStatus">probing hardware…</span>
-    </div>
+    <a class="button ghost small" href="./explore.html" aria-current="page" style="border:1px solid var(--border)">Explore</a>
+    <a class="button ghost small" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
   </nav>
 
   <!-- Tab bar — Explore is center (2) -->

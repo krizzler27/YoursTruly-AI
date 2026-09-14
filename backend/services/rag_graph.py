@@ -2,7 +2,6 @@
 
 Flow: query + history + conversation_id -> decide (DIRECT skips retrieval)
 -> retrieve (scoped hybrid search) -> build (grounded or plain messages).
-Each node appends to `stages` so the stream can narrate progress.
 """
 
 import uuid
@@ -25,7 +24,6 @@ class RagState(TypedDict, total=False):
     decision: RouteDecision
     hits: List[Dict[str, Any]]
     messages: List[Dict[str, str]]
-    stages: List[str]
 
 
 class RagGraph:
@@ -74,7 +72,6 @@ class RagGraph:
                         "query": query,
                         "history": history or [],
                         "conversation_id": conversation_id,
-                        "stages": ["deciding"],
                     }
                 )
             finally:
@@ -86,7 +83,6 @@ class RagGraph:
                 "decision": RouteDecision(route="DIRECT", reason="graph fallback"),
                 "hits": [],
                 "messages": self.llm.build_chat_messages(history or [], query),
-                "stages": ["deciding", "answering"],
                 "route": "DIRECT",
             }
         decision = out.get("decision") or RouteDecision(route="DIRECT", reason="empty")
@@ -103,9 +99,7 @@ class RagGraph:
             print(f"[RAG] decider failed, DIRECT: {e}")
             decision = RouteDecision(route="DIRECT", reason="decider error")
 
-        stages = list(state.get("stages", []))
-        stages.append("searching" if decision.route == "RAG" else "answering")
-        return {"decision": decision, "stages": stages}
+        return {"decision": decision}
 
     def _route(self, state: RagState) -> str:
         decision = state.get("decision")
@@ -125,11 +119,8 @@ class RagGraph:
             return {
                 "hits": [],
                 "decision": RouteDecision(route="DIRECT", reason="retrieval error"),
-                "stages": [*state.get("stages", []), "answering"],
             }
 
-        stages = list(state.get("stages", []))
-        stages.append(f"reading {len(hits)}" if hits else "answering")
         decision = state.get("decision")
 
         if not hits and decision is not None and decision.route == "RAG":
@@ -137,7 +128,7 @@ class RagGraph:
                 route="DIRECT", reason="no hits — ask with filename"
             )
 
-        return {"hits": hits, "decision": decision, "stages": stages}
+        return {"hits": hits, "decision": decision}
 
     def _build(self, state: RagState) -> Dict[str, List[Dict[str, str]]]:
         query = state.get("query", "")
