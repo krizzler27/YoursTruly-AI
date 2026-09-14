@@ -1,13 +1,13 @@
 from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
 import subprocess
-import logging
 import shutil
 import json
 
 from config import config
+from core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

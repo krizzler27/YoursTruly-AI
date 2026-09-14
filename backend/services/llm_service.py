@@ -19,7 +19,10 @@ except ImportError as e:
     raise RuntimeError("llama-cpp-python not installed.") from e
 
 from services.llama_engine import LlamaEngine
+from core.logging import get_logger
 from services.prompt_manager import PromptManager
+
+logger = get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -61,6 +64,7 @@ class LLMService:
         temperature: float = 0.6,
     ):
         """Stream via worker thread + queue."""
+        logger.debug("stream start msgs=%s temp=%s", len(messages), temperature)
         self.engine.ensure_loaded()
         self.engine.acquire()
 
@@ -119,6 +123,11 @@ class LLMService:
         repeat_penalty: float = 1.0,
     ) -> Union[str, T]:
         """Blocking single call — plain str, or validated model instance."""
+        logger.debug(
+            "invoke start max_tokens=%s structured=%s",
+            max_tokens,
+            structured_output.__name__ if structured_output else None,
+        )
         self.engine.ensure_loaded()
         self.engine.acquire()
         try:
@@ -148,6 +157,7 @@ class LLMService:
             try:
                 return structured_output.model_validate_json(raw)
             except Exception as e:
+                logger.warning("structured parse failed: %s", e)
                 raise RuntimeError(
                     f"structured output parse failed: {e}; raw: {raw[:500]}"
                 ) from e

@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import config
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -205,6 +208,7 @@ class DownloadManager:
             if proc.returncode != 0:
                 err = out[-2000:] or f"llmfit download failed for {repo_id} (exit {proc.returncode})"
                 self._update(job_id, status="failed", error=err, logs=out[-3000:], progress=0)
+                logger.warning("download failed job=%s repo=%s", job_id, repo_id)
                 return
 
             m_saved = SAVED_RE.search(out)
@@ -222,8 +226,10 @@ class DownloadManager:
                     logs=out[-3000:],
                     bytes_downloaded=saved_path.stat().st_size,
                 )
+                logger.info("download done job=%s file=%s", job_id, saved_path.name)
             else:
                 self._update(job_id, status="failed", error=out[-2000:] or "Download finished but no GGUF found", logs=out[-3000:], progress=0)
+                logger.warning("download failed job=%s repo=%s", job_id, repo_id)
 
         except subprocess.TimeoutExpired:
             if proc:

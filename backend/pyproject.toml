@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["config.py", "main.py", "router", "services", "db", "schemas", "repository", "prompts"]
+only-include = ["config.py", "main.py", "core", "router", "services", "db", "schemas", "repository", "prompts"]
 
 [tool.uv.sources]
 llama-cpp-python = { index = "llama-vulkan" }

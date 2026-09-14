@@ -6,9 +6,12 @@ from fastapi.responses import JSONResponse
 from pathlib import Path
 
 from config import config
+from core.logging import get_logger
 from schemas.api_schemas import CatalogRequest, ModelDownloadRequest, QuantsRequest, RecommendRequest, SORT_ALIASES
 from services.download_manager import DownloadManager
 from services.llmfit_services import LLMFitServices
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["LLMFit"])
 
@@ -158,6 +161,7 @@ async def download_model(req: ModelDownloadRequest):
     try:
         mgr = DownloadManager.get_instance()
         job = mgr.start(repo_id=req.repo_id, quant=req.quant)
+        logger.info("download start repo=%s job=%s", req.repo_id, job["id"])
         return JSONResponse(status_code=202, content={"job_id": job["id"], "status": job["status"], "job": job})
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": str(e)})

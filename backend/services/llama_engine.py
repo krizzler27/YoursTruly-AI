@@ -13,6 +13,9 @@ except ImportError as e:
     raise RuntimeError("llama-cpp-python not installed.") from e
 
 from config import config
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_physical_cores() -> int:
@@ -63,6 +66,7 @@ class LlamaEngine:
         if not full_path or not full_path.strip():
             return
         if self.is_generating():
+            logger.warning("switch rejected, busy")
             raise RuntimeError("System Busy — model is generating. Try again.")
         p = Path(full_path.strip())
         if not p.exists() or not p.is_file() or p.suffix.lower() != ".gguf":
@@ -98,6 +102,7 @@ class LlamaEngine:
     def acquire(self) -> None:
         """Claim the engine or raise Busy."""
         if self.is_generating():
+            logger.warning("acquire rejected, busy")
             raise RuntimeError("System Busy — model is generating. Try again.")
         self._set_generating(True)
 
@@ -131,6 +136,7 @@ class LlamaEngine:
 
         cores = config.LLAMA_N_THREADS or get_physical_cores()
         ctx = get_default_ctx()
+        logger.info("load model=%s ctx=%s", mp.name, ctx)
         common_kwargs = dict(
             model_path=str(mp),
             n_ctx=ctx,
@@ -173,6 +179,7 @@ class LlamaEngine:
                 pass
             self.llm = None
             gc.collect()
+            logger.info("unload")
 
     def health(self) -> Dict[str, object]:
         disc = self._discover_models()
@@ -251,6 +258,7 @@ class EmbeddingEngine(LlamaEngine):
             verbose=False,
         )
         self.model_path = str(mp)
+        logger.info("embed load model=%s", mp.name)
 
     def embed(
         self,
@@ -258,6 +266,7 @@ class EmbeddingEngine(LlamaEngine):
         batch_size: Optional[int] = None,
     ) -> List[List[float]]:
         """Embed texts (normalized)."""
+        logger.debug("embed start count=%s", len(texts))
 
         if not self.is_loaded():
             self.load()

@@ -6,20 +6,28 @@ from fastapi.responses import JSONResponse
 from fastapi import FastAPI, status
 from fastapi.staticfiles import StaticFiles
 
+from config import config
+from core.logging import get_logger, setup_logging
+from core.middleware import RequestIdMiddleware
 from router import chat_api, llmfit_api, rag_api
 from db.models import Base
 from db.db_engine import engine
 from services.llama_engine import LlamaEngine
 
+logger = get_logger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging(config.LOG_LEVEL)
+    logger.info("startup")
     Base.metadata.create_all(bind=engine)
 
     try:
         LlamaEngine.get_instance().load()
-    except Exception:
-        pass
+        logger.info("model loaded")
+    except Exception as e:
+        logger.warning("model load skipped: %s", e)
 
     from dotenv import load_dotenv
     load_dotenv() # Load Langsmith .env during dev test with public data
@@ -30,6 +38,7 @@ async def lifespan(app: FastAPI):
         LlamaEngine.get_instance().unload()
     except Exception:
         pass
+    logger.info("shutdown")
 
 
 app = FastAPI(title='YoursTruly AI', lifespan=lifespan)
@@ -41,13 +50,15 @@ origins = [
     "http://127.0.0.1:8001",
 ]
 
+app.add_middleware(RequestIdMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Conversation-Id", "X-TTFT", "X-Route"],
+    expose_headers=["X-Conversation-Id", "X-TTFT", "X-Route", "X-Request-Id"],
 )
 
 app.include_router(chat_api.router)
@@ -81,4 +92,6 @@ if frontend_dir.exists():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app=app, host="127.0.0.1", port="8000")
+
+    setup_logging(config.LOG_LEVEL)
+    uvicorn.run(app=app, host="127.0.0.1", port=8000, log_config=None)
