@@ -2,14 +2,16 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
+import asyncio
 import time
 import json
 import uuid
 
 from db.db_engine import get_db
-from services.llama_service import LlamaEngine
+from services.llama_engine import LlamaEngine
+from services.llm_service import LLMService
 from services.chat_services import ChatServices
-from schemas.api_schemas import ChatRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
+from schemas.api_schemas import ChatRequest, ConversationCreateRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -18,6 +20,13 @@ router = APIRouter(prefix="/api", tags=["Chat"])
 async def chat(request: ChatRequest, http_request: Request, db: Session = Depends(get_db)):
 
     try:
+        engine = LlamaEngine.get_instance()
+        if engine.is_generating():
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "System Busy — model is generating. Try again."},
+            )
+
         chat_service = ChatServices(db)
         try:
             conversation = chat_service.ensure_conversation(
@@ -29,21 +38,23 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         history_prev = chat_service.get_history(conversation.id, limit=5)
         chat_service.add_message(conversation.id, "user", request.query)
 
-        engine = LlamaEngine.get_instance()
-        if engine.is_generating():
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "System Busy — model is generating. Try again."},
-                headers={"X-Conversation-Id": str(conversation.id)},
-            )
+        llm = LLMService()
 
         if request.model and request.model.strip():
             engine.switch_model(request.model)
 
-        messages = LlamaEngine.build_chat_messages(history_prev, request.query)
+        start_time = time.perf_counter()  # TTFT covers agent dispatch
+        outcome = await asyncio.to_thread(
+            chat_service.run_agentic, request.query, history_prev, conversation.id
+        )
+        messages, route, stages = outcome["messages"], outcome["route"], outcome.get("stages", [])
 
-        start_time = time.perf_counter()
-        stream = engine.astream_chat(messages=messages, request=http_request)
+        stream = llm.astream_chat(
+            messages=messages,
+            request=http_request,
+            temperature=0.5 if route == "RAG" else 0.6,
+            repeat_penalty=1.1,  # chat generation: loops/echoes cost more than paraphrase risk
+        )
 
         try:
             first_delta = await anext(stream)
@@ -71,6 +82,9 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
             acc_parts.append(first_delta)
 
         async def sse_wrap():
+            for stage in stages:
+                yield f"event: stage\ndata: {json.dumps({'stage': stage})}\n\n"
+
             if first_delta:
                 yield f"data: {json.dumps({'content': first_delta})}\n\n"
 
@@ -94,6 +108,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
             headers={
                 "X-TTFT": f"{ttft_ms:.2f}",
                 "X-Conversation-Id": str(conversation.id),
+                "X-Route": route,
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no"
             }
@@ -105,11 +120,22 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         )
 
 
+@router.post('/conversations', response_model=ConversationResponse, status_code=201)
+def create_conversation(req: ConversationCreateRequest, db: Session = Depends(get_db)):
+    """Create an empty chat shell (e.g. so files can attach before the first message)."""
+    try:
+        return ChatServices(db).ensure_conversation(None, title=req.title)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}
+        )
+
+
 @router.get('/conversations', response_model=List[ConversationResponse])
 def list_conversations(db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        rows = svc.list_conversations(limit=50)
+        llm = ChatServices(db)
+        rows = llm.list_conversations(limit=50)
         return rows
     except Exception as e:
         return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
@@ -118,8 +144,8 @@ def list_conversations(db: Session = Depends(get_db)):
 @router.get('/conversations/{conversation_id}/messages', response_model=List[MessageResponse])
 def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        rows = svc.list_messages(conversation_id, limit=100)
+        llm = ChatServices(db)
+        rows = llm.list_messages(conversation_id, limit=100)
         return rows
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
@@ -130,8 +156,8 @@ def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
 @router.patch('/conversations/{conversation_id}', response_model=ConversationResponse)
 def rename_conversation(conversation_id: uuid.UUID, req: ConversationUpdateRequest, db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        conv = svc.rename_conversation(conversation_id, req.title)
+        llm = ChatServices(db)
+        conv = llm.rename_conversation(conversation_id, req.title)
         return conv
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
@@ -142,8 +168,8 @@ def rename_conversation(conversation_id: uuid.UUID, req: ConversationUpdateReque
 @router.delete('/conversations/{conversation_id}')
 def delete_conversation(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
     try:
-        svc = ChatServices(db)
-        svc.delete_conversation(conversation_id)
+        llm = ChatServices(db)
+        llm.delete_conversation(conversation_id)
         return JSONResponse(content={"status": "deleted", "id": str(conversation_id)})
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})

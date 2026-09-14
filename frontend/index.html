@@ -14,6 +14,7 @@
   <!-- Topnav -->
   <nav data-topnav>
     <button data-sidebar-toggle aria-label="Toggle history" class="ghost small" style="border:1px solid var(--border)">☰</button>
+    <button type="button" data-files-toggle id="filesToggle" aria-label="Toggle files" class="button ghost small mono" style="border:1px solid var(--border)" hidden>Files</button>
     <div class="brand">
       <span class="brand-mark">YT</span>
       YoursTruly AI
@@ -79,9 +80,12 @@
     <!-- Composer -->
     <div class="composer-wrap">
       <form id="composer" class="composer" autocomplete="off">
+        <div id="docTray" class="doc-tray" hidden aria-live="polite"></div>
         <textarea id="prompt" rows="1" placeholder="Ask anything…" aria-label="Message"></textarea>
         <div class="composer-row">
           <div class="composer-left">
+            <button type="button" id="attachBtn" class="ghost small attach-btn" aria-label="Attach files" title="Attach .txt, .md, .pdf (25MB max)">📎</button>
+            <input type="file" id="fileInput" accept=".txt,.md,.pdf" multiple hidden />
             <ot-dropdown>
               <button type="button" id="modelPill" class="model-pill" popovertarget="modelMenu" aria-label="Select model">
                 <span class="dot" aria-hidden="true"></span>
@@ -103,21 +107,33 @@
         </div>
         <div class="composer-foot">
           <span class="ttft" id="ttft" aria-live="polite"></span>
+          <span class="route-pill mono" id="routePill" hidden></span>
         </div>
       </form>
     </div>
   </main>
 
+  <aside id="filesSidebar" data-files-sidebar hidden aria-label="Uploaded files">
+    <div class="vstack" style="gap:8px">
+      <div class="mono history-label">Files · <span id="filesCount">0</span></div>
+      <div id="filesList" class="history-list">
+        <div class="empty-hint">No files yet.</div>
+      </div>
+    </div>
+  </aside>
+
   <dialog id="historyDeleteModal" class="history-delete-modal">
     <form method="dialog" class="history-delete-modal-box">
       <h3>Delete conversation?</h3>
-      <p style="font-size:13.5px; color:var(--muted-foreground); margin:0">This will permanently delete the conversation and all its messages. This cannot be undone.</p>
+      <p style="font-size:13.5px; color:var(--muted-foreground); margin:0">This will permanently delete the conversation, its messages, and its attached files. This cannot be undone.</p>
       <div class="history-delete-modal-actions">
         <button type="button" id="historyDeleteCancel" class="button ghost small mono">Cancel</button>
         <button type="submit" id="historyDeleteConfirm" class="button small mono" value="confirm" style="background:var(--danger); border-color:var(--danger); color:white">Delete</button>
       </div>
     </form>
   </dialog>
+
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
   <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
   <script src="./app.js" type="module"></script>

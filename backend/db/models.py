@@ -1,6 +1,7 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-from sqlalchemy import func, ForeignKey
+from sqlalchemy import func, ForeignKey, UniqueConstraint
 from datetime import datetime, timezone
+from typing import Optional
 import uuid
 import uuid6
 
@@ -37,3 +38,39 @@ class MessagesModel(Base, TimestampMixin):
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"))
     role: Mapped[str] = mapped_column(index=True)
     content: Mapped[str] = mapped_column()
+
+class DocumentsModel(Base, TimestampMixin):
+    """Ingested source files — one row per file, tracks index status."""
+
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid6.uuid7
+    )
+    filename: Mapped[str] = mapped_column(index=True)
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    summary: Mapped[str] = mapped_column(default="")
+    chunk_count: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(default="pending")  # pending|indexed
+
+    __table_args__ = (
+        UniqueConstraint("filename", "conversation_id"),
+    )
+
+
+class DocumentChunksModel(Base):
+    """Chunk text source of truth. String PK shared with the LanceDB row id."""
+
+    __tablename__ = "document_chunks"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    index: Mapped[int] = mapped_column(default=0)
+    heading: Mapped[str] = mapped_column(default="")
+    page: Mapped[int | None] = mapped_column(default=None)
+    text: Mapped[str] = mapped_column()

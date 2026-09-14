@@ -6,20 +6,26 @@ from fastapi.responses import JSONResponse
 from fastapi import FastAPI, status
 from fastapi.staticfiles import StaticFiles
 
-from router import chat_api, llmfit_api
+from router import chat_api, llmfit_api, rag_api
 from db.models import Base
 from db.db_engine import engine
-from services.llama_service import LlamaEngine
+from services.llama_engine import LlamaEngine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+
     try:
         LlamaEngine.get_instance().load()
     except Exception:
         pass
+
+    from dotenv import load_dotenv
+    load_dotenv() # Load Langsmith .env during dev test with public data
+
     yield
+
     try:
         LlamaEngine.get_instance().unload()
     except Exception:
@@ -41,11 +47,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Conversation-Id", "X-TTFT"],
+    expose_headers=["X-Conversation-Id", "X-TTFT", "X-Route"],
 )
 
 app.include_router(chat_api.router)
 app.include_router(llmfit_api.router)
+app.include_router(rag_api.router)
 
 @app.get("/api/health", status_code=status.HTTP_200_OK)
 async def health() -> JSONResponse:
