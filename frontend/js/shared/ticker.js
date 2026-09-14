@@ -1,36 +1,40 @@
-export const TICKER_HINTS = [
-  "Ask with a filename for sharper answers",
-  "Add a heading to narrow the search",
-  "Cite answers as [filename:heading]",
-  "Keep questions short for better hits",
-  "Mention names exactly as written",
-  "Follow up in same chat for context"
-];
-
-export const TICKER_JOKES = [
-  "Thinking locally without any cloud",
-  "Chewing tokens slowly like a llama",
-  "Reading your files right at home",
-  "Keeping your docs off the cloud",
-  "Shuffling vectors into neat piles",
-  "Warming up the tiny local model",
-  "Sipping power to stay on 8 gigs",
-  "Filing facts without leaving home"
-];
-
-export const TICKER_BACKEND = [
-  "Deciding between direct and search",
-  "Embedding query on nomic Q4",
-  "Searching vectors and keywords together",
-  "Fusing ranks with RRF k 60",
-  "Reading top 5 chunks for context",
-  "Building answer with llama.cpp"
+export const TICKER_QUIPS = [
+  "Thinking it over…",
+  "Reading your files…",
+  "Putting the pieces together…",
+  "Writing it up…",
+  "One moment, checking my notes…",
+  "Loyal, local, and slightly overcaffeinated…",
+  "No clouds were consulted…",
+  "YoursTruly is on it…",
+  "Pondering politely…",
+  "Dotting the i's…",
+  "Ask me anything — I live here…",
+  "Slow and steady, like a good neighbour…",
+  "Keeping it between us…",
+  "Warming up the thinking chair…",
+  "Almost there, promise…",
+  "Crossing the t's…",
+  "Just you, me, and this machine…",
+  "Good things take a few tokens…",
+  "Flipping through the pages…",
+  "Nearly done, tying the bow…",
+  "Hmm, let me think…",
+  "Brewing a fresh answer…",
+  "No peeking at the neighbours…",
+  "Your secrets are safe here…",
+  "Stretching the little grey cells…",
+  "Mind the dust, tidying up…",
+  "Taking the scenic route…",
+  "Home-cooked answers only…",
+  "Listening carefully…",
+  "And… here it comes…"
 ];
 
 export function createTicker(threadEl) {
   let timer = null;
   let idx = 0;
-  const pool = [...TICKER_HINTS, ...TICKER_JOKES, ...TICKER_BACKEND];
+  const pool = [...TICKER_QUIPS];
 
   function stop(statusEl) {
     if (timer) clearInterval(timer);

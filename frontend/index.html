@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YoursTruly AI — Local chat. No cloud.</title>
+  <title>YoursTruly AI</title>
   <meta name="color-scheme" content="light dark" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231A1E22'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='13' fill='%23EAE6DF'>YT</text></svg>">
   <link rel="stylesheet" href="https://unpkg.com/@knadh/oat/oat.min.css">
@@ -18,10 +18,7 @@
       YoursTruly AI
     </a>
     <div style="flex:1"></div>
-    <div class="hstack" style="gap:8px; align-items:center">
-      <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-      <span class="mono" id="statusText" style="font-size:11px; color:var(--muted-foreground)">checking…</span>
-    </div>
+    <a class="button ghost small" href="./index.html" aria-current="page" style="border:1px solid var(--border)">Chat</a>
     <a class="button ghost small" href="./explore.html" style="border:1px solid var(--border)">Explore</a>
     <a class="button ghost small" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
   </nav>
@@ -62,21 +59,16 @@
           <h1>Local chat.<br>No cloud.</h1>
           <div id="centerStatus" class="center-status mono" aria-live="polite">
             <span class="status-dot" id="centerStatusDot" aria-hidden="true"></span>
-            <span id="centerStatusText">checking…</span>
+            <span id="centerStatusText">loading model…</span>
           </div>
           <div class="trace-wrap" id="trace" aria-hidden="true">
             <svg viewBox="0 0 560 24" preserveAspectRatio="none">
-              <path id="tracePath" class="trace-path" d="M 8 14 Q 20 4 32 14 T 56 14 T 80 14 T 104 14 T 128 14 T 152 14 T 176 14 T 200 14 T 224 14 T 248 14 T 272 14 T 296 14 T 320 14 T 344 14 T 368 14 T 392 14 T 416 14 T 440 14 T 464 14 T 488 14 T 512 14 T 536 14 T 552 14" />
-              <circle cx="8" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
-              <circle cx="552" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
+              <path id="tracePath" class="trace-path" d="M 4 14 Q 16 4 28 14 T 52 14 T 76 14 T 100 14 T 124 14 T 148 14 T 172 14 T 196 14 T 220 14 T 244 14 T 268 14 T 292 14 T 316 14 T 340 14 T 364 14 T 388 14 T 412 14 T 436 14 T 460 14 T 484 14 T 508 14 T 532 14 T 556 14" />
+              <circle cx="4" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
+              <circle cx="556" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
             </svg>
           </div>
-          <div class="starter-grid" id="starters">
-            <button class="starter" data-starter="Explain quantization like I'm new — what's Q4_K_M?">Explain quantization <small>Q4_K_M in plain terms</small></button>
-            <button class="starter" data-starter="How do I keep KV-cache small on 8GB RAM?">KV-cache on 8GB <small>stay within limits</small></button>
-            <button class="starter" data-starter="Help me write a concise system prompt for a desk assistant">Draft system prompt <small>short & reliable</small></button>
-            <button class="starter" data-starter="Summarize this conversation when it gets long">Summarize thread <small>later, when needed</small></button>
-          </div>
+          <div class="starter-grid" id="starters"><!-- rendered by app.js: 4 of 12, reshuffled per new chat --></div>
         </div>
         <!-- messages injected here -->
       </div>

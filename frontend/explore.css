@@ -13,6 +13,7 @@
   --lab-faint: #E8E6DE;
 }
 .explore {
+  margin: 0;
   font-family: 'Instrument Sans', system-ui, sans-serif;
   background: var(--lab-paper);
   color: var(--lab-chassis);
@@ -23,6 +24,10 @@
    Lab palette stays ONLY for panels/cards/dock below the header. */
 [data-topnav] {
   height: 48px;
+  min-height: 48px;
+  max-height: 48px;
+  box-sizing: border-box;
+  flex-shrink: 0;
   display:flex; align-items:center; gap:16px;
   padding: 0 20px;
   border-bottom: 1px solid var(--border);
@@ -48,8 +53,6 @@
 [data-topnav] a.button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 [data-topnav] a.button[aria-current="page"] { background:var(--ink); color:var(--paper); border-color:var(--ink); }
 [data-topnav] a.button:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
-/* hwDot/hwStatus keep ids for explore.js; shared look comes from theme .status-dot/.mono */
-#hwDot.off { background: var(--danger); }
 
 /* Tabs — Explore is center */
 .tab-bar-wrap {

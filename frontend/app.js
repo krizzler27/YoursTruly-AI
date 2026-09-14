@@ -19,8 +19,6 @@ const modelNameEl = $('#modelName');
 const modelMenu = $('#modelMenu');
 const historyList = $('#historyList');
 const ttftEl = $('#ttft');
-const statusDot = $('#statusDot');
-const statusText = $('#statusText');
 const centerStatusDot = $('#centerStatusDot');
 const centerStatusText = $('#centerStatusText');
 const centerStatus = $('#centerStatus');
@@ -43,9 +41,7 @@ const historyDeleteConfirm = $('#historyDeleteConfirm');
 
 const toast = createToast(toastStack);
 
-function setStatus(online, text) {
-  statusDot.className = 'status-dot' + (online ? '' : ' off');
-  statusText.textContent = text;
+function setHeroStatus(online, text) {
   if (centerStatusDot) centerStatusDot.className = 'status-dot' + (online ? '' : ' off');
   if (centerStatusText) centerStatusText.textContent = text;
   if (centerStatus) centerStatus.style.display = empty.style.display !== 'none' ? 'flex' : 'none';
@@ -168,6 +164,7 @@ function renderContextBar() {
   if (contextBar) {
     contextBar.hidden = !show;
     contextBar.classList.toggle('collapsed', store.state.contextCollapsed && indexed.length > 0);
+    contextBar.classList.toggle('is-overflowing', !contextBar.hidden && contextBar.scrollWidth > contextBar.clientWidth + 1);
   }
   if (contextToggle) contextToggle.textContent = (store.state.contextCollapsed && indexed.length > 0) ? '+' : '–';
 }
@@ -486,7 +483,7 @@ async function fetchModels(forcedHealthy = null) {
     const { models, path } = await chatApi.fetchModels();
     if (healthy === null) healthy = await checkModelHealth();
     if (models.length) {
-      setStatus(healthy, healthy ? 'MODEL READY' : 'MODEL OFFLINE');
+      setHeroStatus(healthy, healthy ? 'model loaded' : 'model offline');
       renderModelMenu(models);
       if (!store.state.selectedModel) store.set({ selectedModel: models[0] });
       const first = parseModel(store.state.selectedModel.name || store.state.selectedModel);
@@ -499,13 +496,13 @@ async function fetchModels(forcedHealthy = null) {
       if (!healthy) { const f2 = parseModel(store.state.selectedModel.name || store.state.selectedModel); modelNameEl.textContent = f2.base; }
       return healthy;
     }
-    setStatus(healthy, healthy ? 'no models — add GGUF to ' + (path || '~/.yourstrulyai/models') : 'MODEL OFFLINE');
+    setHeroStatus(healthy, healthy ? 'no models — add GGUF to ' + (path || '~/.yourstrulyai/models') : 'model offline');
     hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
     updateHintVisibility();
     setModelPillDisabled(true);
     return healthy;
   } catch (e) {
-    setStatus(false, 'MODEL OFFLINE');
+    setHeroStatus(false, 'model offline');
     hint.textContent = '';
     hint.style.display = 'none';
     hint.setAttribute('hidden', '');
@@ -997,6 +994,7 @@ if (contextToggle) {
     try { localStorage.setItem('yt_context_collapsed', store.state.contextCollapsed ? '1' : '0'); } catch {}
     renderContextBar();
   });
+  window.addEventListener('resize', () => renderContextBar());
 }
 if (attachBtn && fileInput) {
   attachBtn.addEventListener('click', () => fileInput.click());
@@ -1030,6 +1028,7 @@ $('#newChat').addEventListener('click', async () => {
   renderContextBar();
   clearThread();
   showEmpty(true);
+  renderStarters();
   ttftEl.textContent = '';
   setRoutePill(null);
   setComposerBlocked(false);
@@ -1039,13 +1038,46 @@ $('#newChat').addEventListener('click', async () => {
   input.focus();
 });
 
-document.querySelectorAll('[data-starter]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    input.value = btn.dataset.starter;
-    autoResize();
-    input.focus();
+const startersEl = $('#starters');
+const STARTER_POOL = [
+  { prompt: 'Help me plan my week day by day', title: 'Plan my week', sub: 'organise the days ahead' },
+  { prompt: 'Draft a polite email to reschedule a meeting', title: 'Draft an email', sub: 'polite and to the point' },
+  { prompt: 'Explain how interest rates work in plain words', title: 'Explain simply', sub: 'any topic, plain words' },
+  { prompt: 'Brainstorm birthday gift ideas under $50', title: 'Brainstorm ideas', sub: 'names, gifts, trips' },
+  { prompt: 'Summarise the following text in three bullet points: ', title: 'Summarise text', sub: 'paste it in after' },
+  { prompt: 'Make a packing checklist for a weekend trip', title: 'Make a checklist', sub: 'packing, moving, tasks' },
+  { prompt: 'Rewrite this to sound more confident: ', title: 'Write it better', sub: 'sharpen my draft' },
+  { prompt: 'Give me pros and cons of buying vs renting a bike', title: 'Pros and cons', sub: 'decide with me' },
+  { prompt: 'Teach me the basics of sourdough in five steps', title: 'Learn something', sub: 'a quick lesson' },
+  { prompt: 'Suggest a simple 20-minute morning routine', title: 'Morning routine', sub: 'start the day right' },
+  { prompt: 'Explain what the internet is to a five-year-old', title: 'Explain to a child', sub: 'really, really simple' },
+  { prompt: 'Help me think through whether to take up running', title: 'Talk it through', sub: 'think out loud together' },
+];
+
+function renderStarters() {
+  if (!startersEl) return;
+  const pool = [...STARTER_POOL];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  startersEl.innerHTML = '';
+  pool.slice(0, 4).forEach(s => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'starter';
+    btn.append(document.createTextNode(s.title + ' '));
+    const small = document.createElement('small');
+    small.textContent = s.sub;
+    btn.appendChild(small);
+    btn.addEventListener('click', () => {
+      input.value = s.prompt;
+      autoResize();
+      input.focus();
+    });
+    startersEl.appendChild(btn);
   });
-});
+}
 
 if (!HTMLElement.prototype.hasOwnProperty('popover')) {
   modelPill.addEventListener('click', () => {
@@ -1077,6 +1109,7 @@ window.addEventListener('focus', pollHealth);
   await loadConversations();
   renderHistory();
   renderTray();
+  renderStarters();
   const h = await fetchModels();
   lastHealthy = h;
   autoResize();
