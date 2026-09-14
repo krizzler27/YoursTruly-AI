@@ -242,11 +242,11 @@ class WholeRagEval(unittest.TestCase):
                 names = self._names(hits) if hits else []
                 scores = [round(h.get("score", 0.0), 4) for h in hits]
                 print(f"\nQ{q['id']} route={route} reason={reason} "
-                      f"gate={gate_ms:.0f}ms stages={out.get('stages')} "
+                      f"gate={gate_ms:.0f}ms "
                       f"hits={list(zip(names, scores))}")
                 self._trace({"id": q["id"], "query": q["query"], "route": route,
                              "reason": reason, "gate_ms": round(gate_ms),
-                             "stages": out.get("stages"), "hits": names,
+                             "hits": names,
                              "scores": scores,
                              "expected_source": q["expected_source"]})
                 if route != "RAG":

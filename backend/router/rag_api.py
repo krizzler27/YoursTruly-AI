@@ -11,6 +11,7 @@ from db.db_engine import get_db
 from schemas.rag_schemas import DocumentResponse, SearchHit, SearchRequest
 from services.ingest_queue import queue_depth, submit_ingest
 from services.ingest_service import SUPPORTED_SUFFIXES, staged_upload_path
+from services.llama_engine import EmbeddingEngine
 from services.rag_service import RagService
 
 router = APIRouter(prefix="/api", tags=["RAG"])
@@ -19,9 +20,9 @@ router = APIRouter(prefix="/api", tags=["RAG"])
 @router.post("/search", response_model=List[SearchHit])
 def search(req: SearchRequest, db: Session = Depends(get_db)):
     """Hybrid search — sync def runs in threadpool, embed is blocking."""
+    engine = EmbeddingEngine()
     try:
-        svc = RagService(db)
-
+        svc = RagService(db, engine=engine)
         return svc.search(req.query, top_k=req.top_k, conversation_id=req.conversation_id)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": str(e)})
@@ -32,6 +33,8 @@ def search(req: SearchRequest, db: Session = Depends(get_db)):
             status_code=500,
             content={"Exception occured": str(e), "type": type(e).__name__},
         )
+    finally:
+        engine.unload()
 
 
 @router.post("/ingest", response_model=DocumentResponse, status_code=status.HTTP_202_ACCEPTED)

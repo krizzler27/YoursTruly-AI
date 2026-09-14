@@ -1,8 +1,6 @@
-const API_BASE = 'http://127.0.0.1:8000';
-const $ = (s, r=document) => r.querySelector(s);
+import { API_BASE } from './js/shared/config.js';
+import { $, escapeHtml as esc } from './js/shared/utils.js';
 
-const hwDot = $('#hwDot');
-const hwStatus = $('#hwStatus');
 const kpiRam = $('#kpiRam');
 const kpiVram = $('#kpiVram');
 const kpiCores = $('#kpiCores');
@@ -126,7 +124,6 @@ function toast(msg, type='info', ttl){
   el.addEventListener('mouseenter', ()=> clearTimeout(t));
   el.addEventListener('mouseleave', ()=> t=setTimeout(dismiss, 1200));
 }
-function esc(s){ return s.replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
 function formatProvidersLabel(set){
@@ -329,8 +326,6 @@ async function fetchSystem(){
       const cores = sys.cpu_cores ?? '—';
       const cpuName = sys.cpu_name ?? '—';
       const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '—';
-      if(hwDot) hwDot.classList.remove('off');
-      if(hwStatus) hwStatus.textContent = 'hardware ready (cached)';
       if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
       if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
       if(kpiCores) kpiCores.textContent = String(cores);
@@ -373,8 +368,6 @@ async function fetchSystem(){
     const cores = sys.cpu_cores ?? '—';
     const cpuName = sys.cpu_name ?? '—';
     const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '—';
-    if(hwDot) hwDot.classList.remove('off');
-    if(hwStatus) hwStatus.textContent = 'hardware ready';
     if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
     if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
     if(kpiCores) kpiCores.textContent = String(cores);
@@ -406,8 +399,6 @@ async function fetchSystem(){
     if(hardwareLoading) hardwareLoading.hidden = true;
     if(hwStack) hwStack.hidden = false;
   }catch{
-    if(hwDot) hwDot.classList.add('off');
-    if(hwStatus) hwStatus.textContent = 'offline — llmfit not found';
     if(kpiCpuName) kpiCpuName.textContent='—';
     if(hardwareLoading) hardwareLoading.hidden = true;
     if(hwStack) hwStack.hidden = false;

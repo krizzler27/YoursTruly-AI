@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Explore Models — YoursTruly AI</title>
+  <title>YoursTruly AI</title>
   <meta name="color-scheme" content="light" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231B1F24'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='13' fill='%23F2F0E8'>YT</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,21 +13,15 @@
   <link rel="stylesheet" href="./explore.css">
 </head>
 <body class="explore">
-  <nav class="explore-topnav" aria-label="Primary">
+  <nav data-topnav aria-label="Primary">
     <a class="brand" href="./index.html">
       <span class="brand-mark">YT</span>
       YoursTruly AI
-      <span class="brand-sub">Lab</span>
     </a>
-    <div class="topnav-links" role="tablist">
-      <a href="./index.html">Chat</a>
-      <a href="./explore.html" aria-current="page">Explore</a>
-      <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">API</a>
-    </div>
-    <div class="topnav-status">
-      <span class="hw-dot" id="hwDot" aria-hidden="true"></span>
-      <span class="mono" id="hwStatus">probing hardware…</span>
-    </div>
+    <div style="flex:1"></div>
+    <a class="button ghost small" href="./index.html" style="border:1px solid var(--border)">Chat</a>
+    <a class="button ghost small" href="./explore.html" aria-current="page" style="border:1px solid var(--border)">Explore</a>
+    <a class="button ghost small" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
   </nav>
 
   <!-- Tab bar — Explore is center (2) -->

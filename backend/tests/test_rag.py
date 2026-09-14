@@ -235,7 +235,7 @@ class Graph(unittest.TestCase):
         ]
         return RagGraph(db=db, rag=rag, decider=decider or MagicMock(), llm=llm)
 
-    def test_rag_route_searches_scoped_and_stages(self):
+    def test_rag_route_searches_scoped(self):
         rag = MagicMock()
         rag.search.return_value = [
             {"document_id": "d", "heading": "H", "text": "t", "score": 1.0}
@@ -249,8 +249,7 @@ class Graph(unittest.TestCase):
         self.assertEqual(out["route"], "RAG")
         _, kwargs = rag.search.call_args
         self.assertEqual(kwargs.get("conversation_id"), cid)
-        self.assertEqual(out["stages"][0], "deciding")
-        self.assertIn("searching", out["stages"])
+        rag.build_messages.assert_called_once()
 
     def test_direct_skips_retrieval(self):
         rag = MagicMock()
@@ -259,7 +258,6 @@ class Graph(unittest.TestCase):
         out = self.graph(rag, decider).run("hi")
         self.assertEqual(out["route"], "DIRECT")
         rag.search.assert_not_called()
-        self.assertIn("answering", out["stages"])
 
     def test_retrieval_error_fails_open_direct(self):
         rag = MagicMock()

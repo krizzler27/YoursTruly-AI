@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YoursTruly AI — Local chat. No cloud.</title>
+  <title>YoursTruly AI</title>
   <meta name="color-scheme" content="light dark" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231A1E22'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='13' fill='%23EAE6DF'>YT</text></svg>">
   <link rel="stylesheet" href="https://unpkg.com/@knadh/oat/oat.min.css">
@@ -12,18 +12,13 @@
 </head>
 <body data-sidebar-layout="always">
   <!-- Topnav -->
-  <nav data-topnav>
-    <button data-sidebar-toggle aria-label="Toggle history" class="ghost small" style="border:1px solid var(--border)">☰</button>
-    <button type="button" data-files-toggle id="filesToggle" aria-label="Toggle files" class="button ghost small mono" style="border:1px solid var(--border)" hidden>Files</button>
-    <div class="brand">
+  <nav data-topnav aria-label="Primary">
+    <a class="brand" href="./index.html">
       <span class="brand-mark">YT</span>
       YoursTruly AI
-    </div>
+    </a>
     <div style="flex:1"></div>
-    <div class="hstack" style="gap:8px; align-items:center">
-      <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-      <span class="mono" id="statusText" style="font-size:11px; color:var(--muted-foreground)">checking…</span>
-    </div>
+    <a class="button ghost small" href="./index.html" aria-current="page" style="border:1px solid var(--border)">Chat</a>
     <a class="button ghost small" href="./explore.html" style="border:1px solid var(--border)">Explore</a>
     <a class="button ghost small" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
   </nav>
@@ -31,7 +26,8 @@
   <!-- Sidebar — memory ledger -->
   <aside data-sidebar>
     <header class="vstack" style="gap:10px">
-      <button id="newChat" class="new-chat button">+ New chat</button>
+      <button data-sidebar-toggle aria-label="Toggle history" class="ghost small sidebar-toggle" style="border:1px solid var(--border)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <button id="newChat" class="new-chat button"><span class="new-chat-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span><span class="new-chat-label">+ New chat</span></button>
     </header>
 
     <div class="vstack" style="gap:8px">
@@ -50,6 +46,12 @@
 
   <!-- Main thread -->
   <main>
+    <div id="contextBar" class="context-bar" hidden>
+      <span class="mono context-label">Context</span>
+      <span id="contextFiles" class="context-files"></span>
+      <span style="flex:1"></span>
+      <button type="button" id="contextToggle" class="ghost small mono context-toggle" aria-label="Collapse context">–</button>
+    </div>
     <div class="thread-wrap" id="threadWrap">
       <div class="thread" id="thread">
         <!-- Empty hero — thesis -->
@@ -57,21 +59,16 @@
           <h1>Local chat.<br>No cloud.</h1>
           <div id="centerStatus" class="center-status mono" aria-live="polite">
             <span class="status-dot" id="centerStatusDot" aria-hidden="true"></span>
-            <span id="centerStatusText">checking…</span>
+            <span id="centerStatusText">loading model…</span>
           </div>
           <div class="trace-wrap" id="trace" aria-hidden="true">
             <svg viewBox="0 0 560 24" preserveAspectRatio="none">
-              <path id="tracePath" class="trace-path" d="M 8 14 Q 20 4 32 14 T 56 14 T 80 14 T 104 14 T 128 14 T 152 14 T 176 14 T 200 14 T 224 14 T 248 14 T 272 14 T 296 14 T 320 14 T 344 14 T 368 14 T 392 14 T 416 14 T 440 14 T 464 14 T 488 14 T 512 14 T 536 14 T 552 14" />
-              <circle cx="8" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
-              <circle cx="552" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
+              <path id="tracePath" class="trace-path" d="M 4 14 Q 16 4 28 14 T 52 14 T 76 14 T 100 14 T 124 14 T 148 14 T 172 14 T 196 14 T 220 14 T 244 14 T 268 14 T 292 14 T 316 14 T 340 14 T 364 14 T 388 14 T 412 14 T 436 14 T 460 14 T 484 14 T 508 14 T 532 14 T 556 14" />
+              <circle cx="4" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
+              <circle cx="556" cy="14" r="2.5" fill="var(--signal)" opacity="0.95"/>
             </svg>
           </div>
-          <div class="starter-grid" id="starters">
-            <button class="starter" data-starter="Explain quantization like I'm new — what's Q4_K_M?">Explain quantization <small>Q4_K_M in plain terms</small></button>
-            <button class="starter" data-starter="How do I keep KV-cache small on 8GB RAM?">KV-cache on 8GB <small>stay within limits</small></button>
-            <button class="starter" data-starter="Help me write a concise system prompt for a desk assistant">Draft system prompt <small>short & reliable</small></button>
-            <button class="starter" data-starter="Summarize this conversation when it gets long">Summarize thread <small>later, when needed</small></button>
-          </div>
+          <div class="starter-grid" id="starters"><!-- rendered by app.js: 4 of 12, reshuffled per new chat --></div>
         </div>
         <!-- messages injected here -->
       </div>
@@ -84,7 +81,7 @@
         <textarea id="prompt" rows="1" placeholder="Ask anything…" aria-label="Message"></textarea>
         <div class="composer-row">
           <div class="composer-left">
-            <button type="button" id="attachBtn" class="ghost small attach-btn" aria-label="Attach files" title="Attach .txt, .md, .pdf (25MB max)">📎</button>
+            <button type="button" id="attachBtn" class="ghost small attach-btn" aria-label="Attach files" title="Attach .txt, .md, .pdf (25MB max)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 20.8201C15.426 22.392 8.574 22.392 2 20.8201"/><path d="M12.0508 16V2"/><path d="M7.09961 6.21997L10.6096 2.60986C10.7895 2.42449 11.0048 2.27715 11.2427 2.17651C11.4806 2.07588 11.7363 2.02417 11.9946 2.02417C12.2529 2.02417 12.5086 2.07588 12.7465 2.17651C12.9844 2.27715 13.1997 2.42449 13.3796 2.60986L16.8996 6.21997"/></svg></button>
             <input type="file" id="fileInput" accept=".txt,.md,.pdf" multiple hidden />
             <ot-dropdown>
               <button type="button" id="modelPill" class="model-pill" popovertarget="modelMenu" aria-label="Select model">
@@ -112,15 +109,6 @@
       </form>
     </div>
   </main>
-
-  <aside id="filesSidebar" data-files-sidebar hidden aria-label="Uploaded files">
-    <div class="vstack" style="gap:8px">
-      <div class="mono history-label">Files · <span id="filesCount">0</span></div>
-      <div id="filesList" class="history-list">
-        <div class="empty-hint">No files yet.</div>
-      </div>
-    </div>
-  </aside>
 
   <dialog id="historyDeleteModal" class="history-delete-modal">
     <form method="dialog" class="history-delete-modal-box">
