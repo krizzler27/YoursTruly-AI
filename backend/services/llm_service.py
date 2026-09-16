@@ -20,6 +20,7 @@ except ImportError as e:
 
 from services.llama_engine import LlamaEngine
 from core.logging import get_logger
+from core.trace import traceable
 from services.prompt_manager import PromptManager
 
 logger = get_logger(__name__)
@@ -56,6 +57,7 @@ class LLMService:
             {"role": "user", "content": current_query},
         ]
 
+    @traceable(name="llm.astream_chat")
     async def astream_chat(
         self,
         messages: List[Dict[str, str]],
@@ -113,6 +115,7 @@ class LLMService:
         finally:
             self.engine.release()
 
+    @traceable(name="llm.invoke")
     def invoke(
         self,
         messages: List[Dict[str, str]],

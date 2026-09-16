@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+import sys
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +22,11 @@ class Config(BaseSettings):
     LLAMA_N_GPU_LAYERS: Optional[int] = None  # auto: -1 Vulkan else 0
     DATABASE_URL: str = "sqlite+pysqlite:///yourstrulyai.db"
     LOG_LEVEL: str = "INFO"  # dev console verbosity; silent in frozen exe
+
+    @property
+    def IS_DEV(self) -> bool:
+        """True from source, False in shipped exe; property so env can't spoof it."""
+        return not getattr(sys, "frozen", False)
 
     @field_validator("LLAMA_MODEL_PATH", mode="after")
     @classmethod

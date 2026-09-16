@@ -1,12 +1,14 @@
 from sqlalchemy.orm import Session
-from typing import Optional, List
+from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 
 from db.models import ConversationsModel, MessagesModel
 from core.logging import get_logger
+from core.trace import traceable
 from repository.chat_repository import ChatRepository
 from repository.message_repository import MessageRepository
+from services.rag_graph import RagGraph
 from services.rag_service import RagService
 
 logger = get_logger(__name__)
@@ -84,12 +86,11 @@ class ChatServices:
             raise ValueError(f"Conversation {conversation_id} not found")
         return rows
 
+    @traceable(name="run_agentic")
     def run_agentic(
         self, query: str, history: List[dict], conversation_id: uuid.UUID
     ) -> dict:
         """Single entry to the agent graph (owns decide/retrieve/build)."""
-        from services.rag_graph import RagGraph
-
         logger.debug("run_agentic start q=%.100s", query)
         out = RagGraph(self.db).run(query, history, conversation_id)
         logger.info("run_agentic done route=%s hits=%s", out.get("route"), len(out.get("hits", [])))

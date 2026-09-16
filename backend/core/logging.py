@@ -1,7 +1,6 @@
 import contextvars
 import logging
 import logging.config
-import sys
 from typing import Optional
 
 request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
@@ -45,7 +44,9 @@ class ContextFilter(logging.Filter):
 
 def setup_logging(level: str = "INFO") -> None:
     """Single console setup for app + uvicorn; silent in frozen exe."""
-    if getattr(sys, "frozen", False):
+    from config import config
+
+    if not config.IS_DEV:
         logging.disable(logging.CRITICAL)
         return
     normalized = (level or "INFO").upper()

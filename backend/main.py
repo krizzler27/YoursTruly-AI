@@ -29,9 +29,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("model load skipped: %s", e)
 
-    from dotenv import load_dotenv
-    load_dotenv() # Load Langsmith .env during dev test with public data
-
     yield
 
     try:

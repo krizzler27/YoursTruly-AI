@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from db.models import DocumentsModel
 from core.logging import get_logger
+from core.trace import traceable
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, sid
 from services.llama_engine import EmbeddingEngine, get_default_ctx
@@ -41,6 +42,7 @@ class RagService:
         self.lance = lance or LanceRepository(db)
         self.docs = docs or DocumentRepository(db)
 
+    @traceable(name="rag.search")
     def search(
         self, query: str, top_k: int = 5, conversation_id: Optional[uuid.UUID] = None
     ) -> List[Dict[str, Any]]:
