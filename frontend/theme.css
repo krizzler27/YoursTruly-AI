@@ -1,4 +1,4 @@
-/* Bench Vermilion — YoursTruly AI theme for Oat */
+/* Bench Vermilion - YoursTruly AI theme for Oat */
 @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
@@ -36,7 +36,7 @@
   --radius-pill: 999px;
 }
 
-/* Dark scheme — ink base, paper text */
+/* Dark scheme - ink base, paper text */
 [data-theme="dark"] {
   --background: #1A1E22;
   --foreground: #EAE6DF;
@@ -151,7 +151,7 @@ body[data-sidebar-layout="always"][data-sidebar-open] > aside[data-sidebar] .new
   max-width: none;
 }
 
-/* Context bar — this chat's provenance, inside the thread column */
+/* Context bar - this chat's provenance, inside the thread column */
 .context-bar {
   position: sticky; top: 0; z-index: 4;
   display: flex; align-items: center; gap: 10px;
@@ -196,7 +196,7 @@ body[data-sidebar-layout="always"][data-sidebar-open] > aside[data-sidebar] .new
   color: var(--muted-foreground);
 }
 
-/* Topnav — thin, quiet, like a bench label */
+/* Topnav - thin, quiet, like a bench label */
 [data-topnav] {
   height: 48px;
   min-height: 48px;
@@ -251,7 +251,7 @@ body[data-sidebar-layout="always"][data-sidebar-open] > aside[data-sidebar] .new
 .status-dot.off { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent); }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.75 } }
 
-/* Sidebar — memory ledger */
+/* Sidebar - memory ledger */
 [data-sidebar] {
   background: #F1EEE7;
   border-right: 1px solid var(--border);
@@ -402,7 +402,7 @@ body[data-sidebar-layout="always"][data-sidebar-open] > aside[data-sidebar] .new
   font-size: 13px;
   line-height: 1.5;
 }
-/* History delete modal — reuse explore dialog */
+/* History delete modal - reuse explore dialog */
 .history-delete-modal { border: 0; padding: 0; background: transparent; max-width: min(420px, 90vw); }
 .history-delete-modal::backdrop { background: rgba(26,30,34,0.42); backdrop-filter: blur(2px); }
 .history-delete-modal-box { background: white; border: 1px solid var(--border); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 12px 32px rgba(26,30,34,0.18); }
@@ -430,7 +430,7 @@ main {
   padding-bottom: 24px;
 }
 
-/* Empty hero — thesis */
+/* Empty hero - thesis */
 .empty {
   margin: 32px 0 12px 0;
   text-align: center;
@@ -476,7 +476,7 @@ main {
 .starter small::before { content: "· "; }
 @media (max-width: 600px) { .starter-grid { grid-template-columns: 1fr; } }
 
-/* Trace path — signature (single continuous wave, no kink) */
+/* Trace path - signature (single continuous wave, no kink) */
 .trace-wrap {
   position: relative;
   height: 24px;
@@ -502,7 +502,7 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .trace-path.animate { animation: none; }
 }
-/* Center status — above trace, mirrors topnav */
+/* Center status - above trace, mirrors topnav */
 .center-status {
   display: flex; gap: 8px; align-items: center; justify-content: center;
   margin: 10px 0 4px 0;
@@ -601,7 +601,7 @@ main {
 }
 @keyframes blink { 0%,50% { opacity:1 } 51%,100% { opacity:0 } }
 
-/* Composer — sticky at bottom */
+/* Composer - sticky at bottom */
 .composer-wrap {
   position: sticky; bottom: 0;
   background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--paper) 88%, white) 18%, var(--paper) 100%);
@@ -682,7 +682,7 @@ main {
 .composer textarea:disabled { cursor: not-allowed; color: var(--muted-foreground); }
 .attach-btn:disabled, .model-pill:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 
-/* Model menu — opens upward when in sticky composer */
+/* Model menu - opens upward when in sticky composer */
 .model-menu {
   min-width: 260px;
   padding: 6px;
@@ -744,7 +744,7 @@ ot-dropdown { position: relative; }
   background: color-mix(in srgb, var(--signal) 8%, white);
 }
 
-/* Attachments — upload + tray */
+/* Attachments - upload + tray */
 .attach-btn {
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -812,7 +812,7 @@ ot-dropdown { position: relative; }
   .doc-spin { animation: none; }
 }
 
-/* RAG liveliness — spinner + rotating hint above the assistant bubble */
+/* RAG liveliness - spinner + rotating hint above the assistant bubble */
 .rag-status {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px; letter-spacing: 0.06em;

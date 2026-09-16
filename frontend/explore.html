@@ -24,7 +24,7 @@
     <a class="button ghost small" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" style="border:1px solid var(--border)">API</a>
   </nav>
 
-  <!-- Tab bar — Explore is center (2) -->
+  <!-- Tab bar - Explore is center (2) -->
   <div class="tab-bar-wrap">
     <div class="tab-bar" role="tablist" aria-label="Explore sections">
       <button role="tab" id="tab-hardware" class="tab-btn" data-tab="hardware" aria-selected="false" aria-controls="panel-hardware">Hardware</button>
@@ -36,7 +36,7 @@
   <!-- Panels -->
   <div class="panels">
 
-    <!-- Hardware panel — top to bottom, RAM first -->
+    <!-- Hardware panel - top to bottom, RAM first -->
     <section id="panel-hardware" class="panel" role="tabpanel" aria-labelledby="tab-hardware" hidden>
       <div class="panel-inner hardware-panel">
         <header class="panel-head">
@@ -47,7 +47,7 @@
           <div class="hw-card total-ram-card">
             <div class="hw-kpi">
               <span class="kpi-label mono">Total RAM</span>
-              <span class="kpi-value" id="kpiTotalRam">—</span>
+              <span class="kpi-value" id="kpiTotalRam">-</span>
               <div class="kpi-bar"><span id="totalRamFill"></span></div>
               <span class="kpi-meta mono" id="kpiTotalRamMeta">installed</span>
             </div>
@@ -55,7 +55,7 @@
           <div class="hw-card ram-card">
             <div class="hw-kpi">
               <span class="kpi-label mono">Available RAM</span>
-              <span class="kpi-value" id="kpiRam">—</span>
+              <span class="kpi-value" id="kpiRam">-</span>
               <div class="kpi-bar"><span id="ramFill"></span></div>
               <span class="kpi-meta mono" id="kpiRamMeta"></span>
             </div>
@@ -63,16 +63,16 @@
           <div class="hw-card vram-card">
             <div class="hw-kpi">
               <span class="kpi-label mono">GPU VRAM</span>
-              <span class="kpi-value" id="kpiVram">—</span>
+              <span class="kpi-value" id="kpiVram">-</span>
               <div class="kpi-bar"><span id="vramFill"></span></div>
               <span class="kpi-meta mono" id="kpiVramMeta"></span>
             </div>
           </div>
           <div class="hw-card details">
             <div class="detail-grid" id="hwDetails">
-              <div class="detail"><span class="mono">CPU</span><strong id="kpiCpuName">—</strong></div>
-              <div class="detail"><span class="mono">Cores</span><strong id="kpiCores">—</strong></div>
-              <div class="detail"><span class="mono">GPU</span><strong id="kpiGpu">—</strong></div>
+              <div class="detail"><span class="mono">CPU</span><strong id="kpiCpuName">-</strong></div>
+              <div class="detail"><span class="mono">Cores</span><strong id="kpiCores">-</strong></div>
+              <div class="detail"><span class="mono">GPU</span><strong id="kpiGpu">-</strong></div>
             </div>
             <div id="hwExtra" class="hw-extra mono"></div>
           </div>
@@ -80,16 +80,16 @@
       </div>
     </section>
 
-    <!-- Explore panel — marketplace (default) -->
+    <!-- Explore panel - marketplace (default) -->
     <section id="panel-explore" class="panel" role="tabpanel" aria-labelledby="tab-explore">
       <div class="panel-inner catalog-panel">
         <header class="catalog-hero">
           <div class="hero-copy">
             <h1>Models for this device</h1>
-            <p>Filtered for your hardware. <span class="badge perfect inline" title="Best estimate for this device — fits without extra paging, but actual speed varies by load">Perfect</span> is the best estimate for this device.</p>
+            <p>Filtered for your hardware. <span class="badge perfect inline" title="Best estimate for this device - fits without extra paging, but actual speed varies by load">Perfect</span> is the best estimate for this device.</p>
           </div>
           <div class="hero-meta mono">
-            <span id="catalogCount">—</span>
+            <span id="catalogCount">-</span>
           </div>
         </header>
 
@@ -100,7 +100,7 @@
             <label class="check mono"><input type="checkbox" id="includeCommunity" /> Community</label>
           </div>
           <div class="filter-row bottom">
-            <label class="filter-select mono" title="Best fit = highest score, Fastest = highest tok/s, Smallest = lowest VRAM">Sort <select id="sort"><option value="score" selected title="Highest overall score (fit+quality+speed)">Best fit</option><option value="tps" title="Highest estimated tokens/sec">Fastest</option><option value="mem" title="Lowest VRAM/disk — usually smaller models, often faster">Smallest</option></select></label>
+            <label class="filter-select mono" title="Best fit = highest score, Fastest = highest tok/s, Smallest = lowest VRAM">Sort <select id="sort"><option value="score" selected title="Highest overall score (fit+quality+speed)">Best fit</option><option value="tps" title="Highest estimated tokens/sec">Fastest</option><option value="mem" title="Lowest VRAM/disk - usually smaller models, often faster">Smallest</option></select></label>
             <div class="filter-select mono providers-wrap" id="providersWrap">
               <span>Providers</span>
               <button type="button" id="providerBtn" class="provider-btn mono" aria-haspopup="true" aria-expanded="false" title="All providers"><span id="providerBtnLabel">All</span><span class="chev" aria-hidden="true">▾</span></button>
@@ -129,7 +129,7 @@
       </div>
     </section>
 
-    <!-- Installed panel — CRUD -->
+    <!-- Installed panel - CRUD -->
     <section id="panel-installed" class="panel" role="tabpanel" aria-labelledby="tab-installed" hidden>
       <div class="panel-inner installed-panel">
         <header class="panel-head">
@@ -173,7 +173,7 @@
   <dialog id="deleteModal" class="delete-modal">
     <form method="dialog" class="delete-modal-box">
       <h3>Delete model?</h3>
-      <p class="mono" id="deleteModalName">—</p>
+      <p class="mono" id="deleteModalName">-</p>
       <p style="font-size:13.5px; color:#5A5D63;">This will permanently remove the file from disk.</p>
       <div class="delete-modal-actions">
         <button type="button" id="deleteCancel" class="ghost small mono">Cancel</button>

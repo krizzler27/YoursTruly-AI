@@ -1,4 +1,4 @@
-/* Explore — YoursTruly Lab
+/* Explore - YoursTruly Lab
    Palette: Paper #F2F0E8, Chassis #1B1F24, Zinc #A9ACB3, Ember #FF4E18, Moss #0FA06A, Amber #D9A500
    Type: Sora (display), Instrument Sans (body), JetBrains Mono (data)
 */
@@ -20,7 +20,7 @@
   -webkit-font-smoothing: antialiased;
 }
 [hidden] { display:none !important; }
-/* Unified topnav — SAME structure/look as chat (theme tokens, 48px, Newsreader).
+/* Unified topnav - SAME structure/look as chat (theme tokens, 48px, Newsreader).
    Lab palette stays ONLY for panels/cards/dock below the header. */
 [data-topnav] {
   height: 48px;
@@ -54,7 +54,7 @@
 [data-topnav] a.button[aria-current="page"] { background:var(--ink); color:var(--paper); border-color:var(--ink); }
 [data-topnav] a.button:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
 
-/* Tabs — Explore is center */
+/* Tabs - Explore is center */
 .tab-bar-wrap {
   display:flex; justify-content:center;
   padding:12px 18px 0;
@@ -131,7 +131,7 @@
 .delete-modal-box p { margin:0; }
 .delete-modal-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:4px; }
 
-/* Hardware panel — top to bottom, RAM first */
+/* Hardware panel - top to bottom, RAM first */
 .hardware-panel .hw-stack {
   display:flex;
   flex-direction:column;
@@ -172,7 +172,7 @@
 .badge.inline.perfect { background: color-mix(in srgb, var(--lab-moss) 14%, white); border-color: color-mix(in srgb, var(--lab-moss) 22%, transparent); color:#0A5C3F; }
 .hero-meta { font-size:12px; color:#6B6E73; }
 
-/* Filter bar — two-level in same card */
+/* Filter bar - two-level in same card */
 .filter-bar {
   display:flex; flex-direction:column; gap:10px;
   background:white; border:1px solid var(--lab-border); border-radius:12px;
@@ -212,7 +212,7 @@
 .catalog-meta .muted { color:var(--lab-zinc); }
 .catalog-meta .status { margin-left:auto; }
 
-/* Grid — proper cards */
+/* Grid - proper cards */
 .catalog-grid {
   display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap:14px;
 }

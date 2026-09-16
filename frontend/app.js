@@ -166,7 +166,7 @@ function renderContextBar() {
     contextBar.classList.toggle('collapsed', store.state.contextCollapsed && indexed.length > 0);
     contextBar.classList.toggle('is-overflowing', !contextBar.hidden && contextBar.scrollWidth > contextBar.clientWidth + 1);
   }
-  if (contextToggle) contextToggle.textContent = (store.state.contextCollapsed && indexed.length > 0) ? '+' : '–';
+  if (contextToggle) contextToggle.textContent = (store.state.contextCollapsed && indexed.length > 0) ? '+' : '-';
 }
 
 function clearThread() {
@@ -249,7 +249,7 @@ function renderTray() {
     const chip = document.createElement('span');
     const isUpdate = store.state.serverDocs.some(d => d.filename === name && d.status === 'indexed');
     chip.className = 'doc-chip ' + (isUpdate ? 'updating' : 'indexing');
-    chip.title = isUpdate ? `Updating ${name}…` : `${name} — indexing…`;
+    chip.title = isUpdate ? `Updating ${name}…` : `${name} - indexing…`;
     const spin = document.createElement('span');
     spin.className = 'doc-spin';
     const label = document.createElement('span');
@@ -382,7 +382,7 @@ async function pollDocs() {
       toast(`${d.filename} indexed`, 'success');
     });
     docs.filter(d => d.status === 'failed' && !store.state.prevIndexedNames.has(d.filename)).forEach(d => {
-      toast(`${d.filename} failed — retry`, 'error');
+      toast(`${d.filename} failed - retry`, 'error');
     });
     store.set({ prevIndexedNames: currIndexed });
     const stillIndexing = docs.some(d => d.status === 'pending' || d.status === 'indexing');
@@ -496,7 +496,7 @@ async function fetchModels(forcedHealthy = null) {
       if (!healthy) { const f2 = parseModel(store.state.selectedModel.name || store.state.selectedModel); modelNameEl.textContent = f2.base; }
       return healthy;
     }
-    setHeroStatus(healthy, healthy ? 'no models — add GGUF to ' + (path || '~/.yourstrulyai/models') : 'model offline');
+    setHeroStatus(healthy, healthy ? 'no models - add GGUF to ' + (path || '~/.yourstrulyai/models') : 'model offline');
     hint.textContent = 'Enter to send \u2022 Shift+Enter for newline';
     updateHintVisibility();
     setModelPillDisabled(true);
@@ -508,7 +508,7 @@ async function fetchModels(forcedHealthy = null) {
     hint.setAttribute('hidden', '');
     setModelPillDisabled(true);
     modelNameEl.textContent = 'offline';
-    modelMenu.innerHTML = `<div class="mono" style="padding:8px 10px; color:var(--muted-foreground)">Model offline — check ~/.yourstrulyai/models</div>`;
+    modelMenu.innerHTML = `<div class="mono" style="padding:8px 10px; color:var(--muted-foreground)">Model offline - check ~/.yourstrulyai/models</div>`;
     return false;
   }
 }
@@ -785,7 +785,7 @@ async function send() {
   const hasStaged = store.state.stagedFiles.size > 0;
   if ((!query && !hasStaged) || store.state.isStreaming) return;
   if (store.state.composerBlocked || isIndexing()) {
-    toast('Indexing docs… chat paused — ask after Indexed', 'warning');
+    toast('Indexing docs… chat paused - ask after Indexed', 'warning');
     setComposerBlocked(true, GATE_HINT);
     return;
   }
@@ -906,7 +906,7 @@ async function send() {
     stopTicker(statusEl);
     const m = e && e.message || '';
     const isBusy = m.includes('429') || m.includes('System Busy');
-    const msg = isBusy ? '**System Busy — model is generating.** Please wait and try again.' : '**Could not reach backend / model not loaded.** Check ~/.yourstrulyai/models and backend logs.';
+    const msg = isBusy ? '**System Busy - model is generating.** Please wait and try again.' : '**Could not reach backend / model not loaded.** Check ~/.yourstrulyai/models and backend logs.';
     updateAssistantCard(card, msg, true);
   } finally {
     stopTicker(statusEl);
@@ -919,7 +919,7 @@ async function send() {
   }
 }
 
-// History menu + rename + delete — global handlers
+// History menu + rename + delete - global handlers
 document.addEventListener('click', (e) => {
   const insideItem = e.target.closest('.history-item');
   if (!insideItem) {
@@ -934,7 +934,7 @@ document.addEventListener('click', (e) => {
     }
     return;
   }
-  // click inside another item while renaming — treat as outside save
+  // click inside another item while renaming - treat as outside save
   if (store.state.renamingId && insideItem.dataset.id !== String(store.state.renamingId)) {
     const input = historyList.querySelector(`[data-rename-input="${store.state.renamingId}"]`);
     const raw = input ? input.value.trim() : '';
@@ -1013,7 +1013,7 @@ if (attachBtn && fileInput) {
       await uploadFilesNow(valids);
     } catch (e) {
       console.error(e);
-      toast('Upload failed — retry', 'error');
+      toast('Upload failed - retry', 'error');
     }
     input.focus();
   });
@@ -1104,7 +1104,7 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', pollHealth);
 
-// Init — single health check via fetchModels (no duplicate)
+// Init - single health check via fetchModels (no duplicate)
 (async () => {
   await loadConversations();
   renderHistory();

@@ -9,7 +9,7 @@ export const TICKER_QUIPS = [
   "YoursTruly is on it…",
   "Pondering politely…",
   "Dotting the i's…",
-  "Ask me anything — I live here…",
+  "Ask me anything - I live here…",
   "Slow and steady, like a good neighbour…",
   "Keeping it between us…",
   "Warming up the thinking chair…",

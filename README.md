@@ -1,28 +1,31 @@
 # YoursTruly AI
 
-**Local chat. No cloud. Runs entirely on-device**
+**Private assistant. No cloud. Runs entirely on-device.**
 
 > Under active development.
 
 ## Core Idea
 
-Small models are sufficient for personal assistance when the orchestration around them is strong. Models are the fixed, constrained ingredient; the engineering around them handles context, continuity, and reliability. Everything runs locally and no data leaves the device.
+Small models are sufficient for personal assistance when the orchestration around them is strong. Models are the fixed, constrained ingredient and the engineering around them handles context, continuity, and reliability. Everything runs locally and no data leaves the device.
 
-> Baseline is 8GB RAM with no GPU and it scales per system, not scoped only to baseline. Model optimization handled automatically based on system hardware specifications.
+> Designed to run on 8GB RAM with no GPU. Scales per system. Better hardware, better run. Adapts automatically to your device.
 
 ## What It Does
 
-A private chat that runs fully on-device with persistent history and streaming replies.
+A private assistant for everyday help that runs entirely on-device.
 
 ## Features
 
-- Model Marketplace
-- One-Click Download
-- Hardware Inspect
+- Private Chat with streaming replies
+- Persistent Memory that stays on device
+- Private Documents - attach txt, md, pdf per chat
+- Model Marketplace with hardware-aware filtering
+- One-click Model download
+- Hardware Inspect 
 
 ## How It Runs
 
-Built on `llama.cpp` via `llama-cpp-python` for in-process inference, offline by default, auto-tuned for low-end hardware.
+Built on `llama.cpp` via `llama-cpp-python` for in-process inference, offline by default and auto-tuned for the device it runs on.
 
 ## Stack
 

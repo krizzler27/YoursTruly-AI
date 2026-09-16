@@ -202,7 +202,7 @@ function ensureDockPolling(){
         dockJobs.set(j.id, j);
         if(prev && prev.status!==j.status){
           if(j.status==='completed') { toast(`Download complete: ${j.filename || j.repo_id}`, 'success'); fetchLocal(); }
-          if(j.status==='failed') toast(`Download failed: ${j.repo_id} — ${j.error ? j.error.slice(0,120) : 'see logs'}`, 'error');
+          if(j.status==='failed') toast(`Download failed: ${j.repo_id} - ${j.error ? j.error.slice(0,120) : 'see logs'}`, 'error');
         }
       });
       renderDock();
@@ -323,15 +323,15 @@ async function fetchSystem(){
       const ramAvail = sys.available_ram_gb ?? sys.memory_available_gb ?? 0;
       const ramTotal = sys.total_ram_gb ?? 0;
       const vram = sys.gpu_vram_gb ?? sys.vram_gb ?? sys.gpus?.[0]?.vram_gb ?? 0;
-      const cores = sys.cpu_cores ?? '—';
-      const cpuName = sys.cpu_name ?? '—';
-      const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '—';
-      if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
-      if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
+      const cores = sys.cpu_cores ?? '-';
+      const cpuName = sys.cpu_name ?? '-';
+      const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '-';
+      if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '-';
+      if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '-';
       if(kpiCores) kpiCores.textContent = String(cores);
       if(kpiGpu) kpiGpu.textContent = String(gpu).slice(0,28);
       if(kpiCpuName) kpiCpuName.textContent = String(cpuName);
-      if(kpiTotalRam) kpiTotalRam.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB` : '—';
+      if(kpiTotalRam) kpiTotalRam.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB` : '-';
       const ramBase = Number(ramTotal) || 16;
       const ramPct = Math.min(100, (Number(ramAvail)||8)/ramBase*100);
       if(ramFill){ ramFill.style.width = ramPct + '%'; ramFill.className = ramPct > 85 ? 'over' : ''; }
@@ -365,15 +365,15 @@ async function fetchSystem(){
     const ramAvail = sys.available_ram_gb ?? sys.memory_available_gb ?? 0;
     const ramTotal = sys.total_ram_gb ?? 0;
     const vram = sys.gpu_vram_gb ?? sys.vram_gb ?? sys.gpus?.[0]?.vram_gb ?? 0;
-    const cores = sys.cpu_cores ?? '—';
-    const cpuName = sys.cpu_name ?? '—';
-    const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '—';
-    if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '—';
-    if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '—';
+    const cores = sys.cpu_cores ?? '-';
+    const cpuName = sys.cpu_name ?? '-';
+    const gpu = sys.gpu_name ?? sys.gpus?.[0]?.name ?? '-';
+    if(kpiRam) kpiRam.textContent = ramAvail ? `${Number(ramAvail).toFixed(1)} GB` : '-';
+    if(kpiVram) kpiVram.textContent = vram ? `${Number(vram).toFixed(1)} GB` : '-';
     if(kpiCores) kpiCores.textContent = String(cores);
     if(kpiGpu) kpiGpu.textContent = String(gpu).slice(0,28);
     if(kpiCpuName) kpiCpuName.textContent = String(cpuName);
-    if(kpiTotalRam) kpiTotalRam.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB` : '—';
+    if(kpiTotalRam) kpiTotalRam.textContent = ramTotal ? `${Number(ramTotal).toFixed(1)} GB` : '-';
     const ramBase = Number(ramTotal) || 16;
     const ramPct = Math.min(100, (Number(ramAvail)||8)/ramBase*100);
     if(ramFill){ ramFill.style.width = ramPct + '%'; ramFill.className = ramPct > 85 ? 'over' : ''; }
@@ -399,7 +399,7 @@ async function fetchSystem(){
     if(hardwareLoading) hardwareLoading.hidden = true;
     if(hwStack) hwStack.hidden = false;
   }catch{
-    if(kpiCpuName) kpiCpuName.textContent='—';
+    if(kpiCpuName) kpiCpuName.textContent='-';
     if(hardwareLoading) hardwareLoading.hidden = true;
     if(hwStack) hwStack.hidden = false;
   }
@@ -460,7 +460,7 @@ async function fetchLocal(){
       cacheTotalSize.textContent = models.length ? `• ${total.toFixed(2)} GB total` : '';
     }
     if(!models.length){
-      localList.innerHTML='<div class="empty mono">No models installed — go to Explore and Download a Perfect fit.</div>';
+      localList.innerHTML='<div class="empty mono">No models installed - go to Explore and Download a Perfect fit.</div>';
     } else {
       const sizeMap = new Map(details.map(d=>[d.name, d.size_gb]));
       const mtimeMap = new Map(details.map(d=>[d.name, d.modified]));
@@ -516,9 +516,9 @@ function cardTemplate(m){
   const sources = (m.gguf_sources||[]).map(g=>g.repo).join(', ') || '';
   const repo = m.hf_repo || (m.gguf_sources?.[0]?.repo) || m.name || '';
   const quant = m.quant || m.best_quant || '';
-  const tps = m.tps ? `${m.tps} tok/s` : '—';
-  const vram = m.vram_gb ? `${m.vram_gb} GB` : '—';
-  const disk = m.disk_size_gb ? `${m.disk_size_gb} GB` : '—';
+  const tps = m.tps ? `${m.tps} tok/s` : '-';
+  const vram = m.vram_gb ? `${m.vram_gb} GB` : '-';
+  const disk = m.disk_size_gb ? `${m.disk_size_gb} GB` : '-';
   const name = esc(m.name||'');
   const provider = esc(m.provider||'');
   const already = isRepoInstalled(repo, quant);
@@ -594,7 +594,7 @@ function bindDownloadButtons(){
     btn.addEventListener('click', async ()=>{
       const repo=btn.dataset.repo;
       const quant=btn.dataset.quant;
-      if(!repo){ toast('No repo for this model — try search','warning'); return; }
+      if(!repo){ toast('No repo for this model - try search','warning'); return; }
       if(btn.disabled) return;
       btn.disabled=true;
       btn.dataset._busy='1';
@@ -616,7 +616,7 @@ function bindDownloadButtons(){
           toast(`Queued download: ${repo} ${quant ? '('+quant+')' : ''}`, 'info');
         } else if(resp.status===409) {
           const isInstalled = (data.detail||'').includes('already installed');
-          throw new Error(data.detail || (isInstalled ? 'Model already installed' : 'A download is already in progress — please wait'));
+          throw new Error(data.detail || (isInstalled ? 'Model already installed' : 'A download is already in progress - please wait'));
         } else if(!resp.ok) {
           throw new Error(data.detail || data['Exception occured'] || `HTTP ${resp.status}`);
         } else {
