@@ -1,4 +1,4 @@
-"""Agentic entry decider — which capability serves this query.
+"""Agentic entry decider - which capability serves this query.
 
 Routes today: DIRECT (answer from the model) and RAG (local documents).
 WEB and other capabilities slot in as new route values plus branches.
@@ -11,13 +11,16 @@ import uuid
 from sqlalchemy.orm import Session
 
 from repository.document_repository import DocumentRepository
+from core.logging import get_logger
 from schemas.rag_schemas import RouteDecision
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
 
+logger = get_logger(__name__)
+
 
 class Decider:
-    """Entry decider — mechanical guards plus one structured SLM call."""
+    """Entry decider - mechanical guards plus one structured SLM call."""
 
     def __init__(
         self,
@@ -39,7 +42,6 @@ class Decider:
         clean = (query or "").strip()
         if not clean:
             return RouteDecision(route="DIRECT", reason="empty query")
-
         if conversation_id is not None:
             attached = self.docs.list_by_conversation(conversation_id, limit=8)
             if not attached:
@@ -74,15 +76,19 @@ class Decider:
                 structured_output=RouteDecision,
             )
             assert isinstance(result, RouteDecision)
+            logger.info("decide route=%s reason=%.100s", result.route, result.reason)
             return result
         except RuntimeError as e:
             # Grammar-constrained SLMs often emit the right word in the
             # wrong envelope; recover it from the raw output if present.
             recovered = _recover_route(str(e))
             if recovered is not None:
+                logger.info("decide route=%s reason=recovered", recovered)
                 return RouteDecision(route=recovered, reason="recovered")
+            logger.warning("decider fallback: %s", e)
             return RouteDecision(route="DIRECT", reason="decider fallback")
-        except Exception:
+        except Exception as e:
+            logger.warning("decider fallback: %s", e)
             return RouteDecision(route="DIRECT", reason="decider fallback")
 
 

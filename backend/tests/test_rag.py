@@ -339,7 +339,7 @@ class QueueMechanics(DbCase):
         cid = self.conv()
         with patch.object(ingest_queue, "SessionLocal", lambda: self.db):
             ingest_queue._process(
-                (str(uuid.uuid4()), self.write(), "ghost.md", str(cid))
+                (str(uuid.uuid4()), self.write(), "ghost.md", str(cid), "test-req")
             )  # must not raise
 
     def test_failed_marker_visible(self):
@@ -409,7 +409,7 @@ class QueueMechanics(DbCase):
             src = self.write("t.md", "hello world " * 100)
             doc = ingest_queue.submit_ingest(self.db, src, "t.md", cid)
             self.drain()  # keep the real worker out of it
-            ingest_queue._process((str(doc.id), src, "t.md", str(cid)))
+            ingest_queue._process((str(doc.id), src, "t.md", str(cid), "test-req"))
         rows = self.db.query(DocumentsModel).filter(
             DocumentsModel.conversation_id == cid).all()
         self.assertEqual(len(rows), 1)

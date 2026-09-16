@@ -6,16 +6,19 @@ from fastapi.responses import JSONResponse
 from pathlib import Path
 
 from config import config
+from core.logging import get_logger
 from schemas.api_schemas import CatalogRequest, ModelDownloadRequest, QuantsRequest, RecommendRequest, SORT_ALIASES
 from services.download_manager import DownloadManager
 from services.llmfit_services import LLMFitServices
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["LLMFit"])
 
 
 @router.get('/system', status_code=status.HTTP_200_OK)
 def system_info():
-    """System hardware info — sync def runs in threadpool, not blocking event loop."""
+    """System hardware info - sync def runs in threadpool, not blocking event loop."""
     try:
         svc = LLMFitServices()
         data = svc.system_info()
@@ -86,7 +89,7 @@ def catalog_post(req: CatalogRequest):
 
 @router.post('/recommend', status_code=status.HTTP_200_OK)
 def recommend(req: RecommendRequest):
-    """Recommend with use_case filter — sync def → threadpool."""
+    """Recommend with use_case filter - sync def → threadpool."""
     try:
         svc = LLMFitServices()
         providers = req.providers
@@ -113,7 +116,7 @@ def recommend(req: RecommendRequest):
 
 @router.post('/models/quants', status_code=status.HTTP_200_OK)
 def list_quants(req: QuantsRequest):
-    """List available quants — sync def → threadpool."""
+    """List available quants - sync def → threadpool."""
     try:
         svc = LLMFitServices()
         data = svc.list_remote_ggufs(req.model)
@@ -130,7 +133,7 @@ def list_quants(req: QuantsRequest):
 
 @router.get('/models', status_code=status.HTTP_200_OK)
 def models():
-    """List installed models — key=path, value=name for direct use without Path concat."""
+    """List installed models - key=path, value=name for direct use without Path concat."""
     try:
         svc = LLMFitServices()
         infos = svc.list_local_info()  # each {name, path, size_gb, ...}
@@ -154,10 +157,11 @@ def models():
 
 @router.post('/models/download', status_code=status.HTTP_200_OK)
 async def download_model(req: ModelDownloadRequest):
-    """Enqueue single download — 202 instantly, 409 if already busy (neutral)."""
+    """Enqueue single download - 202 instantly, 409 if already busy (neutral)."""
     try:
         mgr = DownloadManager.get_instance()
         job = mgr.start(repo_id=req.repo_id, quant=req.quant)
+        logger.info("download start repo=%s job=%s", req.repo_id, job["id"])
         return JSONResponse(status_code=202, content={"job_id": job["id"], "status": job["status"], "job": job})
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": str(e)})

@@ -1,8 +1,8 @@
-"""Download manager — non-blocking single GGUF download with polling.
+"""Download manager - non-blocking single GGUF download with polling.
 
 Runs `llmfit download` in a daemon Thread so POST /api/models/download
 returns 202 instantly. Frontend polls GET /api/downloads/{id}.
-Only one download at a time — second request gets 409.
+Only one download at a time - second request gets 409.
 """
 
 from __future__ import annotations
@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import config
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -75,7 +78,7 @@ class DownloadManager:
 
         with self._jobs_lock:
             if any(j["status"] in ("queued", "downloading") for j in self._jobs.values()):
-                raise RuntimeError("A download is already in progress — please wait")
+                raise RuntimeError("A download is already in progress - please wait")
         if self._is_already_installed(repo_id, quant):
             raise RuntimeError("Model already installed")
 
@@ -205,6 +208,7 @@ class DownloadManager:
             if proc.returncode != 0:
                 err = out[-2000:] or f"llmfit download failed for {repo_id} (exit {proc.returncode})"
                 self._update(job_id, status="failed", error=err, logs=out[-3000:], progress=0)
+                logger.warning("download failed job=%s repo=%s", job_id, repo_id)
                 return
 
             m_saved = SAVED_RE.search(out)
@@ -222,8 +226,10 @@ class DownloadManager:
                     logs=out[-3000:],
                     bytes_downloaded=saved_path.stat().st_size,
                 )
+                logger.info("download done job=%s file=%s", job_id, saved_path.name)
             else:
                 self._update(job_id, status="failed", error=out[-2000:] or "Download finished but no GGUF found", logs=out[-3000:], progress=0)
+                logger.warning("download failed job=%s repo=%s", job_id, repo_id)
 
         except subprocess.TimeoutExpired:
             if proc:

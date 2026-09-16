@@ -6,11 +6,15 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from db.models import DocumentsModel
+from core.logging import get_logger
+from core.trace import traceable
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, sid
 from services.llama_engine import EmbeddingEngine, get_default_ctx
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
+
+logger = get_logger(__name__)
 
 CHARS_PER_TOKEN = 4  # heuristic until engine-side token counting lands
 ANSWER_RESERVE_TOKENS = 512
@@ -38,6 +42,7 @@ class RagService:
         self.lance = lance or LanceRepository(db)
         self.docs = docs or DocumentRepository(db)
 
+    @traceable(name="rag.search")
     def search(
         self, query: str, top_k: int = 5, conversation_id: Optional[uuid.UUID] = None
     ) -> List[Dict[str, Any]]:
@@ -47,6 +52,7 @@ class RagService:
         if not clean:
             raise ValueError("query cannot be empty")
 
+        logger.debug("search start q=%.100s top_k=%s", clean, top_k)
         vectors = self.engine.embed([clean])
 
         if not vectors or not vectors[0]:
@@ -61,9 +67,11 @@ class RagService:
             if not doc_ids:
                 return []
 
-        return self.lance.hybrid_search(
+        hits = self.lance.hybrid_search(
             clean, vectors[0], top_k=top_k, conversation_id=conversation_id, doc_ids=doc_ids
         )
+        logger.info("search done hits=%s", len(hits))
+        return hits
 
     def list_documents(
         self, limit: int = 100, conversation_id: Optional[uuid.UUID] = None
@@ -128,6 +136,7 @@ class RagService:
         if not hits:
             return LLMService.build_chat_messages(history, clean)
 
+        logger.debug("build grounded hits=%s", len(hits))
         budget = (max_context_tokens or rag_context_tokens()) * CHARS_PER_TOKEN
         blocks = []
         used = 0

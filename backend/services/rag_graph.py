@@ -1,4 +1,4 @@
-"""Agentic chat orchestration — decide, retrieve, build. Sole RAG entry point.
+"""Agentic chat orchestration - decide, retrieve, build. Sole RAG entry point.
 
 Flow: query + history + conversation_id -> decide (DIRECT skips retrieval)
 -> retrieve (scoped hybrid search) -> build (grounded or plain messages).
@@ -11,10 +11,13 @@ from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
 
 from schemas.rag_schemas import RouteDecision
+from core.logging import get_logger
 from services.decider import Decider
 from services.llama_engine import EmbeddingEngine
 from services.llm_service import LLMService
 from services.rag_service import RagService
+
+logger = get_logger(__name__)
 
 
 class RagState(TypedDict, total=False):
@@ -65,6 +68,7 @@ class RagGraph:
         conversation_id: Optional[uuid.UUID] = None,
     ) -> Dict[str, Any]:
         """Run decider then retrieval/build; fail-open DIRECT on any error."""
+        logger.debug("Graph run started - query='%.100s'", query)
         try:
             try:
                 out = self._app.invoke(
@@ -78,7 +82,7 @@ class RagGraph:
                 if self._owns_engine:
                     self.rag.engine.unload()
         except Exception as e:
-            print(f"[RAG] graph failed, DIRECT: {e}")
+            logger.warning("Graph failed - falling back to DIRECT: %s", e)
             return {
                 "decision": RouteDecision(route="DIRECT", reason="graph fallback"),
                 "hits": [],
@@ -88,6 +92,12 @@ class RagGraph:
         decision = out.get("decision") or RouteDecision(route="DIRECT", reason="empty")
         out["decision"] = decision
         out["route"] = decision.route
+        logger.info(
+            "RAG decision - route=%s, hits=%s, reason='%s'",
+            decision.route,
+            len(out.get("hits", [])),
+            decision.reason,
+        )
         return out
 
     def _decide(self, state: RagState) -> Dict[str, Any]:
@@ -96,7 +106,7 @@ class RagGraph:
                 state.get("query", ""), state.get("conversation_id")
             )
         except Exception as e:
-            print(f"[RAG] decider failed, DIRECT: {e}")
+            logger.warning("Decider failed - falling back to DIRECT: %s", e)
             decision = RouteDecision(route="DIRECT", reason="decider error")
 
         return {"decision": decision}
@@ -115,7 +125,7 @@ class RagGraph:
                 conversation_id=state.get("conversation_id"),
             )
         except Exception as e:
-            print(f"[RAG] retrieval failed, DIRECT: {e}")
+            logger.warning("Retrieval failed - falling back to DIRECT: %s", e)
             return {
                 "hits": [],
                 "decision": RouteDecision(route="DIRECT", reason="retrieval error"),
@@ -125,7 +135,7 @@ class RagGraph:
 
         if not hits and decision is not None and decision.route == "RAG":
             decision = RouteDecision(
-                route="DIRECT", reason="no hits — ask with filename"
+                route="DIRECT", reason="no hits - ask with filename"
             )
 
         return {"hits": hits, "decision": decision}

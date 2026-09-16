@@ -19,7 +19,11 @@ except ImportError as e:
     raise RuntimeError("llama-cpp-python not installed.") from e
 
 from services.llama_engine import LlamaEngine
+from core.logging import get_logger
+from core.trace import traceable
 from services.prompt_manager import PromptManager
+
+logger = get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -27,7 +31,7 @@ _GRAMMARS: Dict[type, LlamaGrammar] = {}
 
 
 class LLMService:
-    """Chat orchestration over a LlamaEngine — streaming plus blocking calls."""
+    """Chat orchestration over a LlamaEngine - streaming plus blocking calls."""
 
     def __init__(self, engine: Optional[LlamaEngine] = None):
         self.engine = engine or LlamaEngine.get_instance()
@@ -53,6 +57,7 @@ class LLMService:
             {"role": "user", "content": current_query},
         ]
 
+    @traceable(name="llm.astream_chat")
     async def astream_chat(
         self,
         messages: List[Dict[str, str]],
@@ -61,6 +66,7 @@ class LLMService:
         temperature: float = 0.6,
     ):
         """Stream via worker thread + queue."""
+        logger.debug("stream start msgs=%s temp=%s", len(messages), temperature)
         self.engine.ensure_loaded()
         self.engine.acquire()
 
@@ -109,6 +115,7 @@ class LLMService:
         finally:
             self.engine.release()
 
+    @traceable(name="llm.invoke")
     def invoke(
         self,
         messages: List[Dict[str, str]],
@@ -118,7 +125,12 @@ class LLMService:
         structured_output: Optional[Type[T]] = None,
         repeat_penalty: float = 1.0,
     ) -> Union[str, T]:
-        """Blocking single call — plain str, or validated model instance."""
+        """Blocking single call - plain str, or validated model instance."""
+        logger.debug(
+            "invoke start max_tokens=%s structured=%s",
+            max_tokens,
+            structured_output.__name__ if structured_output else None,
+        )
         self.engine.ensure_loaded()
         self.engine.acquire()
         try:
@@ -148,6 +160,7 @@ class LLMService:
             try:
                 return structured_output.model_validate_json(raw)
             except Exception as e:
+                logger.warning("structured parse failed: %s", e)
                 raise RuntimeError(
                     f"structured output parse failed: {e}; raw: {raw[:500]}"
                 ) from e

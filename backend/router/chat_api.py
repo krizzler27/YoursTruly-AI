@@ -8,10 +8,13 @@ import json
 import uuid
 
 from db.db_engine import get_db
+from core.logging import get_logger, set_conversation_id
 from services.llama_engine import LlamaEngine
 from services.llm_service import LLMService
 from services.chat_services import ChatServices
 from schemas.api_schemas import ChatRequest, ConversationCreateRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -24,7 +27,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         if engine.is_generating():
             return JSONResponse(
                 status_code=429,
-                content={"detail": "System Busy — model is generating. Try again."},
+                content={"detail": "System Busy - model is generating. Try again."},
             )
 
         chat_service = ChatServices(db)
@@ -35,6 +38,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         except ValueError as e:
             return JSONResponse(status_code=404, content={"detail": str(e)})
 
+        set_conversation_id(conversation.id)
         history_prev = chat_service.get_history(conversation.id, limit=5)
         chat_service.add_message(conversation.id, "user", request.query)
 
@@ -59,7 +63,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         try:
             first_delta = await anext(stream)
             ttft_ms = (time.perf_counter() - start_time) * 1000
-            print(f"[METRIC] Time To First Token (TTFT): {ttft_ms:.2f} ms")
+            logger.info("TTFT %.2f ms - route=%s", ttft_ms, route)
         except StopAsyncIteration:
             first_delta = None
             ttft_ms = 0.0

@@ -13,10 +13,13 @@ from langchain_text_splitters import (
 from sqlalchemy.orm import Session
 
 from config import config
+from core.logging import get_logger
 from db.models import DocumentChunksModel, DocumentsModel
 from repository.lance_repository import LanceRepository
 from schemas.rag_schemas import Chunk
 from services.llama_engine import EmbeddingEngine
+
+logger = get_logger(__name__)
 
 SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
 MAX_FILE_MB = 25
@@ -87,7 +90,7 @@ class IngestService:
             )
         ]
 
-    # ---- chunk (one splitter per file type — md/txt/pdf differ) ----
+    # ---- chunk (one splitter per file type - md/txt/pdf differ) ----
 
     def _splitter(self) -> RecursiveCharacterTextSplitter:
         return RecursiveCharacterTextSplitter(
@@ -143,13 +146,14 @@ class IngestService:
         return chunks
 
     def chunk_and_embed(self, docs: List[Document], suffix: str) -> List[Chunk]:
-        """Split by file type, then embed — the ingest path's single call."""
+        """Split by file type, then embed - the ingest path's single call."""
         if suffix == ".md":
             chunks = self.chunk_md(docs[0].page_content)
         elif suffix == ".pdf":
             chunks = self.chunk_pdf(docs)
         else:
             chunks = self.chunk_txt(docs[0].page_content)
+        logger.debug("chunked suffix=%s count=%s", suffix, len(chunks))
         vectors = self.engine.embed([c.text for c in chunks])
         if len(vectors) != len(chunks):
             raise RuntimeError(
@@ -175,6 +179,7 @@ class IngestService:
         chunked = self.chunk_and_embed(docs, suffix)
         if not chunked:
             raise ValueError(f"no chunks produced from {filename}")
+        logger.info("ingest start file=%s chunks=%s", filename, len(chunked))
 
         existing = (
             self.db.query(DocumentsModel)

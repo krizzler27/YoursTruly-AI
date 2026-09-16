@@ -19,11 +19,14 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from db.db_engine import SessionLocal  # worker thread boundary: own session
+from core.logging import get_logger, get_request_id, set_conversation_id, set_request_id
 from db.models import DocumentChunksModel, DocumentsModel
 from repository.chat_repository import ChatRepository
 from repository.document_repository import DocumentRepository, PENDING_PREFIX
 from repository.lance_repository import LanceRepository
 from services.llama_engine import EmbeddingEngine, LlamaEngine
+
+logger = get_logger(__name__)
 
 SUMMARY_MAX_CHARS = 200
 SUMMARY_SOURCE_CHARS = 3000
@@ -61,7 +64,7 @@ def submit_ingest(
     db.commit()
     db.refresh(doc)
 
-    _jobs.put((str(doc.id), source_path, filename, str(conversation_id)))
+    _jobs.put((str(doc.id), source_path, filename, str(conversation_id), get_request_id()))
     _ensure_worker()
     return doc
 
@@ -103,7 +106,7 @@ def _worker_loop() -> None:
         try:
             _process(job)
         except Exception as e:
-            print(f"[INGEST] worker failed: {e}")
+            logger.warning("worker failed: %s", e)
         finally:
             _jobs.task_done()
 
@@ -117,7 +120,9 @@ def _drop_tmp(tmp: Path) -> None:
 
 
 def _process(job: tuple) -> None:
-    doc_id, source_path, filename, conversation_id = job
+    doc_id, source_path, filename, conversation_id, request_id = job
+    set_request_id(request_id)
+    set_conversation_id(conversation_id)
     tmp = Path(source_path)
     db = SessionLocal()
 
@@ -164,7 +169,7 @@ def _process(job: tuple) -> None:
 
     except Exception as e:
         db.rollback()
-        print(f"[INGEST] {filename} failed: {e}")
+        logger.warning("%s failed: %s", filename, e)
         _drop_tmp(tmp)
         _mark_failed(db, UUID(doc_id), filename, UUID(conversation_id), str(e)[:200])
 
@@ -224,7 +229,7 @@ def _mark_failed(
             row.summary = error
         db.commit()
     except Exception as e:
-        print(f"[INGEST] failed marker lost: {e}")
+        logger.warning("failed marker lost: %s", e)
 
 
 def _wait_for_idle(timeout_s: int = IDLE_TIMEOUT_S) -> bool:
@@ -261,12 +266,12 @@ def _write_summary(db: Session, doc: DocumentsModel) -> None:
             )
             summary = (text or "").strip().replace("\n", " ")[:SUMMARY_MAX_CHARS]
         except Exception as e:
-            print(f"[INGEST] summary SLM failed, extractive fallback: {e}")
+            logger.warning("summary SLM failed, extractive fallback: %s", e)
 
     if not summary:
         heads = [c.heading for c in chunks if (c.heading or "").strip()]
         basis = " / ".join(dict.fromkeys(heads)) or head[:SUMMARY_MAX_CHARS]
-        summary = f"{doc.filename} — {basis}"[:SUMMARY_MAX_CHARS]
+        summary = f"{doc.filename} - {basis}"[:SUMMARY_MAX_CHARS]
 
     doc.summary = summary
     db.commit()

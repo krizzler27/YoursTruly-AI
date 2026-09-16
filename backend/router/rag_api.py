@@ -8,18 +8,21 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from db.db_engine import get_db
+from core.logging import get_logger, set_conversation_id
 from schemas.rag_schemas import DocumentResponse, SearchHit, SearchRequest
 from services.ingest_queue import queue_depth, submit_ingest
 from services.ingest_service import SUPPORTED_SUFFIXES, staged_upload_path
 from services.llama_engine import EmbeddingEngine
 from services.rag_service import RagService
 
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/api", tags=["RAG"])
 
 
 @router.post("/search", response_model=List[SearchHit])
 def search(req: SearchRequest, db: Session = Depends(get_db)):
-    """Hybrid search — sync def runs in threadpool, embed is blocking."""
+    """Hybrid search - sync def runs in threadpool, embed is blocking."""
     engine = EmbeddingEngine()
     try:
         svc = RagService(db, engine=engine)
@@ -44,6 +47,7 @@ def ingest(
     db: Session = Depends(get_db),
 ):
     """Accept txt/md/pdf for one chat; queued, indexed in background FIFO."""
+    set_conversation_id(conversation_id)
     raw_name = file.filename or ""
 
     filename = Path(raw_name).name.strip()
@@ -73,6 +77,7 @@ def ingest(
 
     try:
         doc = submit_ingest(db, tmp_path, filename, conversation_id)
+        logger.info("ingest accepted file=%s depth=%s", filename, queue_depth())
 
         return JSONResponse(
             status_code=202,
@@ -118,6 +123,7 @@ def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db)):
         svc = RagService(db)
 
         deleted = svc.delete_document(document_id)
+        logger.info("document deleted id=%s", deleted)
 
         return JSONResponse(content={"status": "deleted", "id": str(deleted)})
     except ValueError as e:

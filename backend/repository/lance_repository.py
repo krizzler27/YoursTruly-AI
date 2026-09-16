@@ -15,8 +15,11 @@ import lancedb
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from core.logging import get_logger
 from db.models import DocumentChunksModel
 from schemas.rag_schemas import Chunk
+
+logger = get_logger(__name__)
 
 FTS_TABLE = "document_chunks_fts"
 
@@ -81,6 +84,7 @@ class LanceRepository:
         conversation_id: Optional[UUID] = None,
     ) -> None:
         """Replace a document's vectors + fts index (safe to re-run)."""
+        logger.debug("upsert chunks=%s", len(chunks))
         self.delete_document(document_id, commit=False)
 
         did = sid(document_id)
@@ -242,6 +246,7 @@ class LanceRepository:
         """Vector + BM25 candidates fused by RRF, hydrated from sqlite."""
         depth = candidate_k or self.candidate_k
         fusion_k = rrf_k if rrf_k is not None else self.rrf_k
+        logger.debug("hybrid start top_k=%s depth=%s", top_k, depth)
 
         vector_ids = self.vector_search(query_vector, limit=depth, conversation_id=conversation_id)
         fts_ids = self.fts_search(query_text, limit=depth, doc_ids=doc_ids)
@@ -280,6 +285,9 @@ class LanceRepository:
                 }
             )
 
+        logger.debug(
+            "hybrid done vec=%s fts=%s hits=%s", len(vector_ids), len(fts_ids), len(hits)
+        )
         return hits
 
     def _table_names(self) -> List[str]:

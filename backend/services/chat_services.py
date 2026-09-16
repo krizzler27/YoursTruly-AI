@@ -1,12 +1,18 @@
 from sqlalchemy.orm import Session
-from typing import Optional, List
+from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 
 from db.models import ConversationsModel, MessagesModel
+from core.logging import get_logger
+from core.trace import traceable
 from repository.chat_repository import ChatRepository
 from repository.message_repository import MessageRepository
+from services.rag_graph import RagGraph
 from services.rag_service import RagService
+
+logger = get_logger(__name__)
+
 
 class ChatServices:
     """Orchestrates conversation + message persistence for chat/stream."""
@@ -22,7 +28,9 @@ class ChatServices:
         """Return existing conversation or create new when id is None."""
         if conversation_id is None:
             clean_title = (title or "New chat").strip()[:32] or "New chat"
-            return self.chat_repo.create(title=clean_title)
+            conv = self.chat_repo.create(title=clean_title)
+            logger.info("Conversation created - id=%s", conv.id)
+            return conv
         conv = self.chat_repo.get_by_id(conversation_id)
         if conv is None:
             raise ValueError(f"Conversation {conversation_id} not found")
@@ -78,10 +86,12 @@ class ChatServices:
             raise ValueError(f"Conversation {conversation_id} not found")
         return rows
 
+    @traceable(name="run_agentic")
     def run_agentic(
         self, query: str, history: List[dict], conversation_id: uuid.UUID
     ) -> dict:
         """Single entry to the agent graph (owns decide/retrieve/build)."""
-        from services.rag_graph import RagGraph
-
-        return RagGraph(self.db).run(query, history, conversation_id)
+        logger.debug("Chat dispatch started - query='%.100s'", query)
+        out = RagGraph(self.db).run(query, history, conversation_id)
+        logger.info("Chat ready - route=%s, hits=%s", out.get("route"), len(out.get("hits", [])))
+        return out

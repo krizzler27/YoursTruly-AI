@@ -1,13 +1,13 @@
 from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
 import subprocess
-import logging
 import shutil
 import json
 
 from config import config
+from core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -60,7 +60,7 @@ class LLMFitServices:
         include_community: bool,
         extra_flags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Shared runner for `fit`/`recommend` — single place for sort/provider/cli shape."""
+        """Shared runner for `fit`/`recommend` - single place for sort/provider/cli shape."""
         from schemas.api_schemas import SORT_ALIASES
 
         sort = SORT_ALIASES.get(sort.strip().lower(), sort.strip().lower()) if sort else "score"
