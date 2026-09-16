@@ -31,7 +31,7 @@ _GRAMMARS: Dict[type, LlamaGrammar] = {}
 
 
 class LLMService:
-    """Chat orchestration over a LlamaEngine — streaming plus blocking calls."""
+    """Chat orchestration over a LlamaEngine - streaming plus blocking calls."""
 
     def __init__(self, engine: Optional[LlamaEngine] = None):
         self.engine = engine or LlamaEngine.get_instance()
@@ -125,7 +125,7 @@ class LLMService:
         structured_output: Optional[Type[T]] = None,
         repeat_penalty: float = 1.0,
     ) -> Union[str, T]:
-        """Blocking single call — plain str, or validated model instance."""
+        """Blocking single call - plain str, or validated model instance."""
         logger.debug(
             "invoke start max_tokens=%s structured=%s",
             max_tokens,

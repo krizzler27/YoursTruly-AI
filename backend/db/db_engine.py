@@ -4,7 +4,7 @@ from sqlalchemy.pool import NullPool
 
 from config import config
 
-# SQLite-only engine for local desktop app (NullPool — single-user, no idle handles)
+# SQLite-only engine for local desktop app (NullPool - single-user, no idle handles)
 engine = create_engine(
     config.DATABASE_URL,
     echo=False,

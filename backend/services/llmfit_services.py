@@ -60,7 +60,7 @@ class LLMFitServices:
         include_community: bool,
         extra_flags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Shared runner for `fit`/`recommend` — single place for sort/provider/cli shape."""
+        """Shared runner for `fit`/`recommend` - single place for sort/provider/cli shape."""
         from schemas.api_schemas import SORT_ALIASES
 
         sort = SORT_ALIASES.get(sort.strip().lower(), sort.strip().lower()) if sort else "score"

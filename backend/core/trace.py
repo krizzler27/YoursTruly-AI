@@ -1,6 +1,6 @@
-"""Dev-only LangSmith gate — identity when off, real @traceable when on.
+"""Dev-only LangSmith gate - identity when off, real @traceable when on.
 
-Off by default (no env, no key, or frozen exe) — gate is cheap and no
+Off by default (no env, no key, or frozen exe) - gate is cheap and no
 network happens. On only when IS_DEV + LANGSMITH_TRACING=true + API key
 are present; run against public/synthetic data only.
 """
@@ -31,7 +31,7 @@ def _enabled() -> bool:
 
 
 def traceable(*, name: Optional[str] = None, **kw: Any) -> Callable:
-    """Usage: @traceable(name="...") only — no-op when gate is off."""
+    """Usage: @traceable(name="...") only - no-op when gate is off."""
     if not _enabled():
         return lambda fn: fn
 

@@ -34,12 +34,47 @@ def clear_context() -> None:
 
 
 class ContextFilter(logging.Filter):
-    """Inject ids into every record."""
+    """Inject ids and normalize uvicorn names."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_ctx.get()
         record.conversation_id = conversation_id_ctx.get()
+        if record.name.startswith("uvicorn."):
+            record.name = "uvicorn"
         return True
+
+
+class ColoredFormatter(logging.Formatter):
+    GREEN = "\x1b[32m"
+    BLUE = "\x1b[34m"
+    YELLOW = "\x1b[33m"
+    RED = "\x1b[31m"
+    BOLD_RED = "\x1b[31;1m"
+    RESET = "\x1b[0m"
+
+    LOG_FORMAT = "%(asctime)s - [%(name)s: %(levelname)s] - %(message)s"
+
+    FORMATS = {
+        logging.DEBUG: BLUE + LOG_FORMAT + RESET,
+        logging.INFO: GREEN + LOG_FORMAT + RESET,
+        logging.WARNING: YELLOW + LOG_FORMAT + RESET,
+        logging.ERROR: RED + LOG_FORMAT + RESET,
+        logging.CRITICAL: BOLD_RED + LOG_FORMAT + RESET,
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        fmt = self.FORMATS.get(record.levelno, self.LOG_FORMAT)
+        rid = getattr(record, "request_id", "-")
+        cid = getattr(record, "conversation_id", "-")
+        suffix = ""
+        if rid != "-":
+            suffix += f" [req={rid}]"
+        if cid != "-":
+            suffix += f" [conv={cid}]"
+        if suffix:
+            fmt = fmt + suffix
+        formatter = logging.Formatter(fmt=fmt, datefmt="%Y-%m-%d %H:%M:%S")
+        return formatter.format(record)
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -49,6 +84,8 @@ def setup_logging(level: str = "INFO") -> None:
     if not config.IS_DEV:
         logging.disable(logging.CRITICAL)
         return
+
+
     normalized = (level or "INFO").upper()
     if normalized not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         normalized = "INFO"
@@ -58,15 +95,12 @@ def setup_logging(level: str = "INFO") -> None:
             "disable_existing_loggers": False,
             "filters": {"ctx": {"()": ContextFilter}},
             "formatters": {
-                "pretty": {
-                    "format": "%(asctime)s | %(levelname)-5s | %(name)s [%(request_id)s/%(conversation_id)s] | %(message)s",
-                    "datefmt": "%H:%M:%S",
-                }
+                "colored": {"()": ColoredFormatter},
             },
             "handlers": {
                 "console": {
                     "class": "logging.StreamHandler",
-                    "formatter": "pretty",
+                    "formatter": "colored",
                     "filters": ["ctx"],
                     "stream": "ext://sys.stdout",
                 }

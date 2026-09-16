@@ -27,7 +27,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         if engine.is_generating():
             return JSONResponse(
                 status_code=429,
-                content={"detail": "System Busy — model is generating. Try again."},
+                content={"detail": "System Busy - model is generating. Try again."},
             )
 
         chat_service = ChatServices(db)
@@ -63,7 +63,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         try:
             first_delta = await anext(stream)
             ttft_ms = (time.perf_counter() - start_time) * 1000
-            logger.info("ttft %.2f ms route=%s", ttft_ms, route)
+            logger.info("TTFT %.2f ms - route=%s", ttft_ms, route)
         except StopAsyncIteration:
             first_delta = None
             ttft_ms = 0.0

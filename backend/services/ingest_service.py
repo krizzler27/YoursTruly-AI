@@ -90,7 +90,7 @@ class IngestService:
             )
         ]
 
-    # ---- chunk (one splitter per file type — md/txt/pdf differ) ----
+    # ---- chunk (one splitter per file type - md/txt/pdf differ) ----
 
     def _splitter(self) -> RecursiveCharacterTextSplitter:
         return RecursiveCharacterTextSplitter(
@@ -146,7 +146,7 @@ class IngestService:
         return chunks
 
     def chunk_and_embed(self, docs: List[Document], suffix: str) -> List[Chunk]:
-        """Split by file type, then embed — the ingest path's single call."""
+        """Split by file type, then embed - the ingest path's single call."""
         if suffix == ".md":
             chunks = self.chunk_md(docs[0].page_content)
         elif suffix == ".pdf":

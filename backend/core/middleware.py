@@ -1,4 +1,4 @@
-"""Request id middleware — generates and propagates correlation id."""
+"""Request id middleware - generates and propagates correlation id."""
 
 import uuid6
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint

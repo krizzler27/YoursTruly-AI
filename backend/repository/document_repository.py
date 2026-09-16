@@ -10,7 +10,7 @@ PENDING_PREFIX = "__pending__"  # internal ingest rows, never listed
 
 
 class DocumentRepository(BaseRepository[DocumentsModel]):
-    """CRUD over ingested file rows — retrieval hydration reads chunks."""
+    """CRUD over ingested file rows - retrieval hydration reads chunks."""
 
     def __init__(self, db: Session):
         super().__init__(DocumentsModel, db)

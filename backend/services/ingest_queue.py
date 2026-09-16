@@ -271,7 +271,7 @@ def _write_summary(db: Session, doc: DocumentsModel) -> None:
     if not summary:
         heads = [c.heading for c in chunks if (c.heading or "").strip()]
         basis = " / ".join(dict.fromkeys(heads)) or head[:SUMMARY_MAX_CHARS]
-        summary = f"{doc.filename} — {basis}"[:SUMMARY_MAX_CHARS]
+        summary = f"{doc.filename} - {basis}"[:SUMMARY_MAX_CHARS]
 
     doc.summary = summary
     db.commit()

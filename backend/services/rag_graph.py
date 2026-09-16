@@ -1,4 +1,4 @@
-"""Agentic chat orchestration — decide, retrieve, build. Sole RAG entry point.
+"""Agentic chat orchestration - decide, retrieve, build. Sole RAG entry point.
 
 Flow: query + history + conversation_id -> decide (DIRECT skips retrieval)
 -> retrieve (scoped hybrid search) -> build (grounded or plain messages).
@@ -68,7 +68,7 @@ class RagGraph:
         conversation_id: Optional[uuid.UUID] = None,
     ) -> Dict[str, Any]:
         """Run decider then retrieval/build; fail-open DIRECT on any error."""
-        logger.debug("graph run start q=%.100s", query)
+        logger.debug("Graph run started - query='%.100s'", query)
         try:
             try:
                 out = self._app.invoke(
@@ -82,7 +82,7 @@ class RagGraph:
                 if self._owns_engine:
                     self.rag.engine.unload()
         except Exception as e:
-            logger.warning("graph failed, DIRECT: %s", e)
+            logger.warning("Graph failed - falling back to DIRECT: %s", e)
             return {
                 "decision": RouteDecision(route="DIRECT", reason="graph fallback"),
                 "hits": [],
@@ -93,7 +93,7 @@ class RagGraph:
         out["decision"] = decision
         out["route"] = decision.route
         logger.info(
-            "graph done route=%s hits=%s reason=%.100s",
+            "RAG decision - route=%s, hits=%s, reason='%s'",
             decision.route,
             len(out.get("hits", [])),
             decision.reason,
@@ -106,7 +106,7 @@ class RagGraph:
                 state.get("query", ""), state.get("conversation_id")
             )
         except Exception as e:
-            logger.warning("decider failed, DIRECT: %s", e)
+            logger.warning("Decider failed - falling back to DIRECT: %s", e)
             decision = RouteDecision(route="DIRECT", reason="decider error")
 
         return {"decision": decision}
@@ -125,7 +125,7 @@ class RagGraph:
                 conversation_id=state.get("conversation_id"),
             )
         except Exception as e:
-            logger.warning("retrieval failed, DIRECT: %s", e)
+            logger.warning("Retrieval failed - falling back to DIRECT: %s", e)
             return {
                 "hits": [],
                 "decision": RouteDecision(route="DIRECT", reason="retrieval error"),
@@ -135,7 +135,7 @@ class RagGraph:
 
         if not hits and decision is not None and decision.route == "RAG":
             decision = RouteDecision(
-                route="DIRECT", reason="no hits — ask with filename"
+                route="DIRECT", reason="no hits - ask with filename"
             )
 
         return {"hits": hits, "decision": decision}

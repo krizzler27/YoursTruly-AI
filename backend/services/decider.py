@@ -1,4 +1,4 @@
-"""Agentic entry decider — which capability serves this query.
+"""Agentic entry decider - which capability serves this query.
 
 Routes today: DIRECT (answer from the model) and RAG (local documents).
 WEB and other capabilities slot in as new route values plus branches.
@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 
 class Decider:
-    """Entry decider — mechanical guards plus one structured SLM call."""
+    """Entry decider - mechanical guards plus one structured SLM call."""
 
     def __init__(
         self,

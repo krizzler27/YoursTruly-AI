@@ -26,7 +26,7 @@ class Chunk(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """POST /api/search body — query plus result budget."""
+    """POST /api/search body - query plus result budget."""
 
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
@@ -58,7 +58,7 @@ class SearchHit(BaseModel):
 
 
 class DocumentResponse(BaseModel):
-    """Ingested file row — CRUD view over DocumentsModel."""
+    """Ingested file row - CRUD view over DocumentsModel."""
 
     id: uuid.UUID
     filename: str
@@ -74,7 +74,7 @@ class DocumentResponse(BaseModel):
 
 
 class RouteDecision(BaseModel):
-    """Agentic entry decision — DIRECT answers from chat, RAG via local docs (WEB later)."""
+    """Agentic entry decision - DIRECT answers from chat, RAG via local docs (WEB later)."""
 
     route: Literal["DIRECT", "RAG"]
     reason: str = ""

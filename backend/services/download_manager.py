@@ -1,8 +1,8 @@
-"""Download manager — non-blocking single GGUF download with polling.
+"""Download manager - non-blocking single GGUF download with polling.
 
 Runs `llmfit download` in a daemon Thread so POST /api/models/download
 returns 202 instantly. Frontend polls GET /api/downloads/{id}.
-Only one download at a time — second request gets 409.
+Only one download at a time - second request gets 409.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ class DownloadManager:
 
         with self._jobs_lock:
             if any(j["status"] in ("queued", "downloading") for j in self._jobs.values()):
-                raise RuntimeError("A download is already in progress — please wait")
+                raise RuntimeError("A download is already in progress - please wait")
         if self._is_already_installed(repo_id, quant):
             raise RuntimeError("Model already installed")
 

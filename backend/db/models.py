@@ -40,7 +40,7 @@ class MessagesModel(Base, TimestampMixin):
     content: Mapped[str] = mapped_column()
 
 class DocumentsModel(Base, TimestampMixin):
-    """Ingested source files — one row per file, tracks index status."""
+    """Ingested source files - one row per file, tracks index status."""
 
     __tablename__ = "documents"
 

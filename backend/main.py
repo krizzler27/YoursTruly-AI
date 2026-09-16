@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
     try:
         LlamaEngine.get_instance().load()
-        logger.info("model loaded")
+        logger.info("Chat Model loaded")
     except Exception as e:
         logger.warning("model load skipped: %s", e)
 
@@ -76,7 +76,7 @@ async def health() -> JSONResponse:
             "loaded": h.get("loaded"),
             "generating": h.get("generating"),
             "available": h.get("available", []),
-            "message": "Server is Healthy" if is_healthy else "No model installed — download via Explore",
+            "message": "Server is Healthy" if is_healthy else "No model installed - download via Explore",
         })
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})

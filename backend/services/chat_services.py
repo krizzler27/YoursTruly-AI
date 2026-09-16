@@ -29,7 +29,7 @@ class ChatServices:
         if conversation_id is None:
             clean_title = (title or "New chat").strip()[:32] or "New chat"
             conv = self.chat_repo.create(title=clean_title)
-            logger.info("conversation created id=%s", conv.id)
+            logger.info("Conversation created - id=%s", conv.id)
             return conv
         conv = self.chat_repo.get_by_id(conversation_id)
         if conv is None:
@@ -91,7 +91,7 @@ class ChatServices:
         self, query: str, history: List[dict], conversation_id: uuid.UUID
     ) -> dict:
         """Single entry to the agent graph (owns decide/retrieve/build)."""
-        logger.debug("run_agentic start q=%.100s", query)
+        logger.debug("Chat dispatch started - query='%.100s'", query)
         out = RagGraph(self.db).run(query, history, conversation_id)
-        logger.info("run_agentic done route=%s hits=%s", out.get("route"), len(out.get("hits", [])))
+        logger.info("Chat ready - route=%s, hits=%s", out.get("route"), len(out.get("hits", [])))
         return out
