@@ -197,10 +197,8 @@ class Chunking(DbCase):
 
 class Budget(unittest.TestCase):
     def test_derived_not_fixed(self):
-        with patch("services.rag_service.get_default_ctx", return_value=2048):
-            small = rag_context_tokens()
-        with patch("services.rag_service.get_default_ctx", return_value=4096):
-            big = rag_context_tokens()
+        small = rag_context_tokens(2048)
+        big = rag_context_tokens(4096)
         self.assertLess(small, big)
         self.assertLessEqual(small + 512 + 750, 2048)  # rag + answer + history fit
         self.assertGreaterEqual(small, 256)
@@ -216,8 +214,7 @@ class Budget(unittest.TestCase):
             {"document_id": str(uid), "heading": "",
              "page": 2, "text": "x" * 50000, "score": 1.0},
         ]
-        with patch("services.rag_service.get_default_ctx", return_value=2048):
-            msgs = rag.build_messages("q?", hits, [{"role": "user", "content": "hi"}])
+        msgs = rag.build_messages("q?", hits, [{"role": "user", "content": "hi"}], max_context_tokens=2048)
         system = msgs[0]["content"]
         self.assertIn("[f.pdf:p2]", system)
         self.assertLessEqual(len(system), 2048 * 4 + 8000)

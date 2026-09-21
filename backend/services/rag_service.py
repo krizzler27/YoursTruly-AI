@@ -10,7 +10,8 @@ from core.logging import get_logger
 from core.trace import traceable
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, sid
-from services.llama_engine import EmbeddingEngine, get_default_ctx
+from services.llama_engine import EmbeddingEngine
+from config import config
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
 
@@ -23,7 +24,7 @@ HISTORY_CHAR_CAP = 3000
 
 def rag_context_tokens(n_ctx: Optional[int] = None) -> int:
     """Retrieved-context budget derived from the chat window, never fixed."""
-    window = n_ctx or get_default_ctx()
+    window = n_ctx or config.EFFECTIVE_N_CTX
     return max(256, window - ANSWER_RESERVE_TOKENS - HISTORY_CHAR_CAP // CHARS_PER_TOKEN)
 
 

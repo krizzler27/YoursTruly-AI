@@ -2,9 +2,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional
 import gc
-import os
-
-import psutil
 
 try:
     import llama_cpp
@@ -16,24 +13,6 @@ from config import config
 from core.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-def get_physical_cores() -> int:
-    """Physical cores via psutil, fallback to logical//2."""
-    cores = psutil.cpu_count(logical=False)
-    return int(cores) if cores else max(1, (os.cpu_count() or 4) // 2)
-
-
-def get_total_ram_gb() -> float:
-    """Total RAM in GB via psutil, fallback 8.0 if undetermined."""
-    total = psutil.virtual_memory().total
-    return total / (1024**3) if total else 8.0
-
-
-def get_default_ctx() -> int:
-    if config.LLAMA_N_CTX is not None:
-        return int(config.LLAMA_N_CTX)
-    return 4096 if get_total_ram_gb() >= 12.0 else 2048
 
 
 class LlamaEngine:
@@ -134,8 +113,8 @@ class LlamaEngine:
             )
         self.model_path = str(mp)
 
-        cores = config.LLAMA_N_THREADS or get_physical_cores()
-        ctx = get_default_ctx()
+        cores = config.EFFECTIVE_N_THREADS
+        ctx = config.EFFECTIVE_N_CTX
         logger.info("Model loaded - %s (ctx=%s)", mp.name, ctx)
         common_kwargs = dict(
             model_path=str(mp),
@@ -242,11 +221,11 @@ class EmbeddingEngine(LlamaEngine):
             return
         mp = self._resolve_model()
 
-        cores = config.LLAMA_N_THREADS or get_physical_cores()
+        cores = config.EFFECTIVE_N_THREADS
         self.llm = Llama(
             model_path=str(mp),
             embedding=True,
-            n_ctx=min(get_default_ctx(), self.embed_ctx),
+            n_ctx=min(config.EFFECTIVE_N_CTX, self.embed_ctx),
             n_threads=cores,
             n_threads_batch=cores,
             # Encoder packs up to n_batch tokens per native call, which asserts
