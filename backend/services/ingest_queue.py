@@ -10,10 +10,8 @@ the replacement commits; a failed replacement leaves it untouched.
 Temp `__pending__` rows are internal and hidden from listings.
 """
 
-import threading
 import time
 from pathlib import Path
-from queue import Queue
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -24,6 +22,7 @@ from db.models import DocumentChunksModel, DocumentsModel
 from repository.chat_repository import ChatRepository
 from repository.document_repository import DocumentRepository, PENDING_PREFIX
 from repository.lance_repository import LanceRepository
+from services.job_runner import JobRunner
 from services.llama_engine import EmbeddingEngine, LlamaEngine
 
 logger = get_logger(__name__)
@@ -31,10 +30,6 @@ logger = get_logger(__name__)
 SUMMARY_MAX_CHARS = 200
 SUMMARY_SOURCE_CHARS = 3000
 IDLE_TIMEOUT_S = 60
-
-_jobs: Queue = Queue()
-_worker_lock = threading.Lock()
-_worker_started = False
 
 
 def submit_ingest(
@@ -90,25 +85,13 @@ def _drop_stale(db: Session, filename: str, conversation_id: UUID) -> None:
         docs.delete(row.id)
 
 
+_runner = JobRunner(handler=lambda job: _process(job), name="ingest")
+_jobs = _runner.queue
+
+
 def _ensure_worker() -> None:
-    """Start the single FIFO worker once per process."""
-    global _worker_started
-    with _worker_lock:
-        if _worker_started:
-            return
-        threading.Thread(target=_worker_loop, daemon=True).start()
-        _worker_started = True
-
-
-def _worker_loop() -> None:
-    while True:
-        job = _jobs.get()
-        try:
-            _process(job)
-        except Exception as e:
-            logger.warning("worker failed: %s", e)
-        finally:
-            _jobs.task_done()
+    """Start the ingest worker once. Restart it when dead."""
+    _runner.ensure_worker()
 
 
 def _drop_tmp(tmp: Path) -> None:
@@ -279,4 +262,4 @@ def _write_summary(db: Session, doc: DocumentsModel) -> None:
 
 def queue_depth() -> int:
     """Jobs ahead of the just-enqueued one; never negative."""
-    return max(0, _jobs.qsize() - 1)
+    return _runner.queue_depth()
