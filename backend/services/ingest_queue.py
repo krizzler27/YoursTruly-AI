@@ -149,7 +149,7 @@ def _process(job: tuple) -> None:
 
         from services.ingest_service import IngestService, stored_upload_path
 
-        engine = EmbeddingEngine()
+        engine = EmbeddingEngine.get_instance("embed")
         try:
             doc = IngestService(
                 db=db, engine=engine, lance=LanceRepository(db)
@@ -235,7 +235,7 @@ def _mark_failed(
 def _wait_for_idle(timeout_s: int = IDLE_TIMEOUT_S) -> bool:
     """Hold the worker until chat stops generating (protects the 8GB box)."""
     waited = 0
-    while LlamaEngine.get_instance().is_generating():
+    while LlamaEngine.get_instance("chat").is_generating():
         if waited >= timeout_s:
             return False
         time.sleep(2)

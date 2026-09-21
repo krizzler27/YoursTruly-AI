@@ -9,7 +9,7 @@ try:
 except ImportError as e:
     raise RuntimeError("llama-cpp-python not installed.") from e
 
-from config import config
+from config import config, list_models
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,27 +18,15 @@ logger = get_logger(__name__)
 class LlamaEngine:
     """In-process llama.cpp lifecycle - load, switch, health, tenure guards."""
 
-    _instance: Optional["LlamaEngine"] = None
+    _instances: Dict[str, "LlamaEngine"] = {}
     _lock: Lock = Lock()
 
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: Optional[str] = None, role: Optional[str] = None):
         self.model_path: Optional[str] = model_path
+        self._role: Optional[str] = role
         self.llm = None
         self._generating = False
         self._gen_lock = Lock()
-
-    @staticmethod
-    def _discover_models() -> List[Path]:
-        """List installed GGUFs sorted by most recent mtime first."""
-        models_dir = Path(config.LLAMA_MODEL_PATH)
-        try:
-            return sorted(
-                [p for p in models_dir.glob("*.gguf") if p.is_file()],
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-        except Exception:
-            return []
 
     def switch_model(self, full_path: Optional[str]) -> None:
         """Switch to GGUF at full path."""
@@ -61,11 +49,12 @@ class LlamaEngine:
         self.load()
 
     @classmethod
-    def get_instance(cls) -> "LlamaEngine":
+    def get_instance(cls, role: str = "chat", model_path: Optional[str] = None) -> "LlamaEngine":
+        """Singleton slot per role. Creates empty, never loads."""
         with cls._lock:
-            if cls._instance is None:
-                cls._instance = cls()
-            return cls._instance
+            if role not in cls._instances:
+                cls._instances[role] = cls(model_path=model_path, role=role)
+            return cls._instances[role]
 
     def is_loaded(self) -> bool:
         return self.llm is not None
@@ -99,19 +88,13 @@ class LlamaEngine:
                 raise RuntimeError(str(e)) from e
 
     def load(self) -> None:
-        """Load most recent GGUF."""
+        """Load the slot path, else the config chat finder pick."""
         if self.is_loaded():
             return
-        disc = self._discover_models()
-        mp = (
-            Path(self.model_path)
-            if self.model_path and Path(self.model_path).exists()
-            else (disc[0] if disc else None)
-        )
-        if mp is None or not mp.exists():
-            raise FileNotFoundError(
-                f"No GGUF in {Path(config.LLAMA_MODEL_PATH)}. Download a model via Explore."
-            )
+        if self.model_path and Path(self.model_path).exists():
+            mp = Path(self.model_path)
+        else:
+            mp = Path(config.EFFECTIVE_CHAT_MODEL)
         self.model_path = str(mp)
 
         cores = config.EFFECTIVE_N_THREADS
@@ -136,6 +119,7 @@ class LlamaEngine:
             try:
                 self.llm = Llama(n_gpu_layers=-1, **common_kwargs)
             except Exception:
+                logger.warning("GPU load failed, retrying on CPU", exc_info=True)
                 self.llm = Llama(n_gpu_layers=0, **common_kwargs)
         else:
             self.llm = Llama(n_gpu_layers=int(gpu_layers), **common_kwargs)
@@ -149,7 +133,7 @@ class LlamaEngine:
                 )
             )
         except Exception:
-            pass
+            logger.warning("Model warmup probe failed for %s", mp.name, exc_info=True)
 
     def unload(self) -> None:
         if self.llm is not None:
@@ -163,7 +147,7 @@ class LlamaEngine:
             logger.info("Model unloaded")
 
     def health(self) -> Dict[str, object]:
-        disc = self._discover_models()
+        disc = list_models()
         if disc:
             mp = (
                 Path(self.model_path)
@@ -190,38 +174,25 @@ class LlamaEngine:
 class EmbeddingEngine(LlamaEngine):
     """nomic-embed-text engine - embedding only, inherits engine lifecycle."""
 
-    _instance: Optional["EmbeddingEngine"] = None
-    _lock: Lock = Lock()
-
     def __init__(
         self,
         model_path: Optional[str] = None,
+        role: Optional[str] = None,
         embed_ctx: int = 2048,
         batch_size: int = 16,
     ):
-        super().__init__(model_path=model_path)
+        super().__init__(model_path=model_path, role=role or "embed")
         self.embed_ctx = embed_ctx
         self.batch_size = batch_size
-
-    def _resolve_model(self) -> Path:
-        """nomic GGUF path: explicit model_path, else the *nomic*.gguf match."""
-        if self.model_path and Path(self.model_path).exists():
-            return Path(self.model_path)
-        hits = [
-            p for p in Path(config.LLAMA_MODEL_PATH).glob("*nomic*.gguf") if p.is_file()
-        ]
-        if not hits:
-            raise FileNotFoundError(
-                f"No nomic-embed-text GGUF in {config.LLAMA_MODEL_PATH}. "
-                "Download e.g. nomic-ai/nomic-embed-text-v1.5-GGUF Q4_K_M."
-            )
-        return sorted(hits, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
     def load(self) -> None:
         """Load nomic GGUF with embedding=True, clipped ctx, no GPU/warm-up."""
         if self.is_loaded():
             return
-        mp = self._resolve_model()
+        if self.model_path and Path(self.model_path).exists():
+            mp = Path(self.model_path)
+        else:
+            mp = Path(config.EFFECTIVE_EMBED_MODEL)
 
         cores = config.EFFECTIVE_N_THREADS
         self.llm = Llama(

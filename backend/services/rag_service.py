@@ -39,7 +39,7 @@ class RagService:
         docs: Optional[DocumentRepository] = None,
     ):
         self.db = db
-        self.engine = engine or EmbeddingEngine.get_instance()
+        self.engine = engine or EmbeddingEngine.get_instance("embed")
         self.lance = lance or LanceRepository(db)
         self.docs = docs or DocumentRepository(db)
 

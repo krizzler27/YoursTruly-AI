@@ -40,10 +40,10 @@ class RagGraph:
         llm: Optional[LLMService] = None,
         top_k: int = 5,
     ):
-        # Fresh embedder per graph: unloaded after the run so only one
+        # Shared embed slot per graph: unloaded after the run so only one
         # model is resident on the 8GB box. Injected fakes skip this.
         self._owns_engine = rag is None
-        engine = EmbeddingEngine() if self._owns_engine else None
+        engine = EmbeddingEngine.get_instance("embed") if self._owns_engine else None
         self.rag = rag or RagService(db, engine=engine)
         self.decider = decider or Decider(db)
         self.llm = llm or LLMService()

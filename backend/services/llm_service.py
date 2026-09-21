@@ -34,7 +34,7 @@ class LLMService:
     """Chat orchestration over a LlamaEngine - streaming plus blocking calls."""
 
     def __init__(self, engine: Optional[LlamaEngine] = None):
-        self.engine = engine or LlamaEngine.get_instance()
+        self.engine = engine or LlamaEngine.get_instance("chat")
 
     @staticmethod
     def build_chat_messages(

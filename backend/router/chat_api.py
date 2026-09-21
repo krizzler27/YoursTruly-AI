@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api", tags=["Chat"])
 async def chat(request: ChatRequest, http_request: Request, db: Session = Depends(get_db)):
 
     try:
-        engine = LlamaEngine.get_instance()
+        engine = LlamaEngine.get_instance("chat")
         if engine.is_generating():
             return JSONResponse(
                 status_code=429,

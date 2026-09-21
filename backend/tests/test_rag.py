@@ -36,6 +36,17 @@ class FakeEmbed:
     def unload(self):
         pass
 
+    def is_generating(self):
+        return False
+
+
+class FakeEngineFactory:
+    """Stand-in for the engine class: slots resolve to FakeEmbed."""
+
+    @staticmethod
+    def get_instance(role="chat", model_path=None):
+        return FakeEmbed()
+
 
 class DbCase(unittest.TestCase):
     def setUp(self):
@@ -396,7 +407,7 @@ class QueueMechanics(DbCase):
         fake_llm.return_value.invoke.return_value = "a short summary"
         canon = Path(self.tmp.name) / "canon.md"
         with patch.object(ingest_queue, "_ensure_worker", lambda: None), \
-             patch.object(ingest_queue, "EmbeddingEngine", FakeEmbed), \
+             patch.object(ingest_queue, "EmbeddingEngine", FakeEngineFactory), \
              patch.object(ingest_queue, "SessionLocal", lambda: self.db), \
              patch.object(ingest_queue, "LanceRepository",
                           lambda db: self.lance()), \

@@ -131,7 +131,7 @@ class WholeRagEval(unittest.TestCase):
         for p in cls._patches:
             p.start()
         cls.addClassCleanup(lambda: [p.stop() for p in cls._patches])
-        cls.embed = EmbeddingEngine()
+        cls.embed = EmbeddingEngine.get_instance("embed")
         cls.addClassCleanup(cls.embed.unload)
 
         cls.conv = uuid.uuid4()

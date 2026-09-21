@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api", tags=["RAG"])
 @router.post("/search", response_model=List[SearchHit])
 def search(req: SearchRequest, db: Session = Depends(get_db)):
     """Hybrid search - sync def runs in threadpool, embed is blocking."""
-    engine = EmbeddingEngine()
+    engine = EmbeddingEngine.get_instance("embed")
     try:
         svc = RagService(db, engine=engine)
         return svc.search(req.query, top_k=req.top_k, conversation_id=req.conversation_id)

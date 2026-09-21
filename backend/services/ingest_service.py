@@ -54,7 +54,7 @@ class IngestService:
         chunk_overlap: int = 50,
     ):
         self.db = db
-        self.engine = engine or EmbeddingEngine.get_instance()
+        self.engine = engine or EmbeddingEngine.get_instance("embed")
         self.lance = lance or LanceRepository(db)
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
