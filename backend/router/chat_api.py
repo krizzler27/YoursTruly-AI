@@ -89,17 +89,22 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
             if first_delta:
                 yield f"data: {json.dumps({'content': first_delta})}\n\n"
 
-            async for delta in stream:
-                if delta:
-                    acc_parts.append(delta)
-                    yield f"data: {json.dumps({'content': delta})}\n\n"
+            try:
+                async for delta in stream:
+                    if delta:
+                        acc_parts.append(delta)
+                        yield f"data: {json.dumps({'content': delta})}\n\n"
+            except Exception as e:
+                logger.error("Chat stream interrupted, conversation=%s", conversation.id, exc_info=True)
+                yield f"data: {json.dumps({'error': str(e)[:200]})}\n\n"
 
             full_response = "".join(acc_parts).strip()
             if full_response:
                 try:
                     chat_service.add_message(conversation.id, "assistant", full_response)
                 except Exception:
-                    pass
+                    logger.error("Assistant reply shown but not saved, conversation=%s", conversation.id, exc_info=True)
+                    yield f"data: {json.dumps({'warning': 'not saved'})}\n\n"
 
             yield "data: [DONE]\n\n"
 

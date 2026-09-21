@@ -79,11 +79,12 @@ class LlamaEngine:
             self._generating = value
 
     def acquire(self) -> None:
-        """Claim the engine or raise Busy."""
-        if self.is_generating():
-            logger.warning("Model busy - acquire rejected")
-            raise RuntimeError("System Busy - model is generating. Try again.")
-        self._set_generating(True)
+        """Claim the engine or raise Busy. Check-and-set is atomic."""
+        with self._gen_lock:
+            if self._generating:
+                logger.warning("Model busy - acquire rejected")
+                raise RuntimeError("System Busy - model is generating. Try again.")
+            self._generating = True
 
     def release(self) -> None:
         """Release a previous acquire."""
@@ -155,8 +156,9 @@ class LlamaEngine:
             try:
                 del self.llm
             except Exception:
-                pass
-            self.llm = None
+                logger.warning("Model unload cleanup failed", exc_info=True)
+            finally:
+                self.llm = None
             gc.collect()
             logger.info("Model unloaded")
 

@@ -163,7 +163,7 @@ def _process(job: tuple) -> None:
         try:
             tmp.replace(stored_upload_path(conv_id, filename))
         except Exception:
-            pass
+            logger.error("Ingest file promotion failed, doc=%s", doc.id, exc_info=True)
 
         _write_summary(db, doc)
 

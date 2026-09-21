@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     try:
         LlamaEngine.get_instance().unload()
     except Exception:
-        pass
+        logger.warning("Shutdown model unload failed", exc_info=True)
     logger.info("shutdown")
 
 

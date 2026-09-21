@@ -84,6 +84,11 @@ class LLMService:
                     try:
                         delta = chunk["choices"][0]["delta"].get("content", "")
                     except Exception:
+                        logger.warning(
+                            "Dropped malformed stream chunk, keys=%s",
+                            list(chunk.keys()) if isinstance(chunk, dict) else type(chunk),
+                            exc_info=True,
+                        )
                         delta = ""
                     if delta:
                         token_queue.put(delta)
@@ -97,11 +102,8 @@ class LLMService:
         try:
             while True:
                 if request is not None:
-                    try:
-                        if await request.is_disconnected():
-                            break
-                    except Exception:
-                        pass
+                    if await request.is_disconnected():
+                        break
                 try:
                     item = token_queue.get_nowait()
                 except Empty:
