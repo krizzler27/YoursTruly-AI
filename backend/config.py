@@ -1,6 +1,6 @@
 from pathlib import Path
 from functools import lru_cache
-from typing import List, Optional
+from typing import List, Literal, Optional
 import os
 import sys
 
@@ -40,7 +40,7 @@ class Config(BaseSettings):
     LLAMA_N_THREADS: Optional[int] = None  # auto: psutil physical cores
     LLAMA_N_GPU_LAYERS: Optional[int] = None  # auto: -1 Vulkan else 0
     DATABASE_URL: str = "sqlite+pysqlite:///yourstrulyai.db"
-    LOG_LEVEL: str = "INFO"  # dev console verbosity; silent in frozen exe
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"  # dev console verbosity; silent in frozen exe
 
     @property
     def IS_DEV(self) -> bool:

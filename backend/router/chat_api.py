@@ -8,7 +8,7 @@ import json
 import uuid
 
 from db.db_engine import get_db
-from core.logging import get_logger, set_conversation_id
+from core.logging import get_logger, get_request_id, set_conversation_id
 from services.llama_engine import LlamaEngine
 from services.llm_service import LLMService
 from services.chat_services import ChatServices
@@ -77,7 +77,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
                 )
             return JSONResponse(
                 status_code=500,
-                content={"Exception occured": msg, "type": type(e).__name__},
+                content={"error": msg, "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
                 headers={"X-Conversation-Id": str(conversation.id)},
             )
 
@@ -122,7 +122,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
 
     except Exception as e:
         return JSONResponse(
-            status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}
+            status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"}
         )
 
 
@@ -133,7 +133,7 @@ def create_conversation(req: ConversationCreateRequest, db: Session = Depends(ge
         return ChatServices(db).ensure_conversation(None, title=req.title)
     except Exception as e:
         return JSONResponse(
-            status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}
+            status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"}
         )
 
 
@@ -144,7 +144,7 @@ def list_conversations(db: Session = Depends(get_db)):
         rows = llm.list_conversations(limit=50)
         return rows
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.get('/conversations/{conversation_id}/messages', response_model=List[MessageResponse])
@@ -156,7 +156,7 @@ def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.patch('/conversations/{conversation_id}', response_model=ConversationResponse)
@@ -168,7 +168,7 @@ def rename_conversation(conversation_id: uuid.UUID, req: ConversationUpdateReque
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.delete('/conversations/{conversation_id}')
@@ -180,4 +180,4 @@ def delete_conversation(conversation_id: uuid.UUID, db: Session = Depends(get_db
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})

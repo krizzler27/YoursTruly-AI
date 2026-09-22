@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from db.db_engine import get_db
-from core.logging import get_logger, set_conversation_id
+from core.logging import get_logger, get_request_id, set_conversation_id
 from schemas.rag_schemas import DocumentResponse, SearchHit, SearchRequest
 from services.ingest_job import ingest_job
 from services.ingest_service import SUPPORTED_SUFFIXES, staged_upload_path
@@ -34,7 +34,7 @@ def search(req: SearchRequest, db: Session = Depends(get_db)):
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
     finally:
         engine.unload()
@@ -72,7 +72,7 @@ def ingest(
         Path(tmp_path).unlink(missing_ok=True)
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
 
     try:
@@ -93,7 +93,7 @@ def ingest(
         Path(tmp_path).unlink(missing_ok=True)
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
 
 
@@ -109,7 +109,7 @@ def list_documents(
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
 
 
@@ -133,5 +133,5 @@ def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db)):
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )

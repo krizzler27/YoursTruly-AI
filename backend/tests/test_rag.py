@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from db.models import Base, ConversationsModel, DocumentChunksModel, DocumentsModel
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, chunk_id, sid
-from schemas.rag_schemas import Chunk, RouteDecision
+from schemas.rag_schemas import Chunk, RouteDecision, SearchHit
 import services.ingest_job as ingest_job_mod
 from services.ingest_service import IngestService
 from services.rag_service import RagService, rag_context_tokens
@@ -144,10 +144,10 @@ class HybridVector(DbCase):
         hits = lance.hybrid_search(
             "bakery", list(self.EAST), top_k=5,
             conversation_id=conv, doc_ids=[sid(uid_a), sid(uid_b)])
-        self.assertEqual([h["id"] for h in hits],
+        self.assertEqual([h.id for h in hits],
                          [chunk_id(uid_b, 0), chunk_id(uid_a, 0)])
-        self.assertEqual(hits[0]["text"], "beta bakery")
-        self.assertEqual(hits[0]["document_id"], sid(uid_b))
+        self.assertEqual(hits[0].text, "beta bakery")
+        self.assertEqual(hits[0].document_id, sid(uid_b))
 
     def test_vector_respects_conversation_scope(self):
         lance = self.lance()
@@ -222,8 +222,8 @@ class Budget(unittest.TestCase):
             MagicMock(id=uid, filename="f.pdf")
         ]
         hits = [
-            {"document_id": str(uid), "heading": "",
-             "page": 2, "text": "x" * 50000, "score": 1.0},
+            SearchHit(id=f"{uid}:0", document_id=str(uid), heading="",
+                      page=2, text="x" * 50000, score=1.0),
         ]
         msgs = rag.build_messages("q?", hits, [{"role": "user", "content": "hi"}], max_context_tokens=2048)
         system = msgs[0]["content"]
@@ -345,14 +345,14 @@ class QueueMechanics(DbCase):
 
     def test_superseded_job_is_noop(self):
         cid = self.conv()
-        with patch.object(ingest_job, "SessionLocal", lambda: self.db):
+        with patch.object(ingest_job_mod, "SessionLocal", lambda: self.db):
             ingest_job_mod.ingest_job.run(
                 (str(uuid.uuid4()), self.write(), "ghost.md", str(cid), "test-req")
             )  # must not raise
 
     def test_failed_marker_visible(self):
         cid = self.conv()
-        with patch.object(ingest_job, "SessionLocal", lambda: self.db):
+        with patch.object(ingest_job_mod, "SessionLocal", lambda: self.db):
             ingest_job_mod.ingest_job._mark_failed(
                 self.db, uuid.uuid4(), "bad.md", cid, "nope"
             )
@@ -407,9 +407,9 @@ class QueueMechanics(DbCase):
         fake_llm.return_value.invoke.return_value = "a short summary"
         canon = Path(self.tmp.name) / "canon.md"
         with patch.object(ingest_job_mod._runner, "ensure_worker", lambda: None), \
-             patch.object(ingest_job, "EmbeddingEngine", FakeEngineFactory), \
-             patch.object(ingest_job, "SessionLocal", lambda: self.db), \
-             patch.object(ingest_job, "LanceRepository",
+             patch.object(ingest_job_mod, "EmbeddingEngine", FakeEngineFactory), \
+             patch.object(ingest_job_mod, "SessionLocal", lambda: self.db), \
+             patch.object(ingest_job_mod, "LanceRepository",
                           lambda db: self.lance()), \
              patch.object(llm_mod, "LLMService", fake_llm), \
              patch.object(ingest_mod, "stored_upload_path",

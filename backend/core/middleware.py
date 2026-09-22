@@ -5,7 +5,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
-from core.logging import clear_context, set_request_id
+from core.logging import clear_context, get_logger, set_request_id
+
+logger = get_logger(__name__)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -16,6 +18,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         try:
             request_id = incoming.strip() if incoming and incoming.strip() else uuid6.uuid7().hex
         except Exception:
+            logger.debug("Regenerated malformed X-Request-Id=%r", incoming)
             request_id = uuid6.uuid7().hex
         set_request_id(request_id)
         try:

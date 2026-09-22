@@ -256,13 +256,6 @@ function renderTray() {
     label.className = 'doc-name';
     label.textContent = isUpdate ? `Updating ${shortFileName(name)}…` : `${shortFileName(name)}…`;
     chip.append(spin, label);
-    if (info.queueDepth > 0) {
-      const q = document.createElement('span');
-      q.className = 'mono';
-      q.style.fontSize = '10px';
-      q.textContent = `+${info.queueDepth}`;
-      chip.appendChild(q);
-    }
     docTray.appendChild(chip);
   });
 
@@ -401,18 +394,13 @@ async function uploadStaged(conversationId) {
   const byName = new Map(store.state.serverDocs.map(d => [d.filename, d.id]));
   for (const [name, file] of entries) {
     const oldId = byName.get(name) || null;
-    store.state.uploadingFiles.set(name, { file, queueDepth: 0, startTime: Date.now(), oldId });
+    store.state.uploadingFiles.set(name, { file, startTime: Date.now(), oldId });
   }
   renderTray();
   startDocPoll();
   for (const [name, file] of entries) {
     try {
-      const data = await chatApi.uploadFiles(conversationId, file);
-      const info = store.state.uploadingFiles.get(name);
-      if (info && typeof data.queue_depth === 'number') {
-        info.queueDepth = data.queue_depth;
-        if (data.queue_depth > 0) toast(`+${data.queue_depth} ahead in queue`, 'info');
-      }
+      await chatApi.uploadFiles(conversationId, file);
       renderTray();
     } catch (e) {
       if (e && typeof e.status === 'number') {

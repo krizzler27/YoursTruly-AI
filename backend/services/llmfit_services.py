@@ -146,13 +146,13 @@ class LLMFitServices:
 
         sort = SORT_ALIASES.get(sort.strip().lower(), sort.strip().lower()) if sort else "score"
         if sort == "tps":
-            flat.sort(key=lambda m: m.get("tps") or 0, reverse=True)
+            flat.sort(key=lambda m: (m.get("tps") is None, -(m.get("tps") or 0)))
             for k in catalog:
-                catalog[k].sort(key=lambda m: m.get("tps") or 0, reverse=True)
+                catalog[k].sort(key=lambda m: (m.get("tps") is None, -(m.get("tps") or 0)))
         elif sort == "mem":
-            flat.sort(key=lambda m: m.get("vram_gb") or 0)
+            flat.sort(key=lambda m: (m.get("vram_gb") is None, m.get("vram_gb") or 0))
             for k in catalog:
-                catalog[k].sort(key=lambda m: m.get("vram_gb") or 0)
+                catalog[k].sort(key=lambda m: (m.get("vram_gb") is None, m.get("vram_gb") or 0))
         # score is default order from llmfit (already sorted)
         return {
             "system": system,

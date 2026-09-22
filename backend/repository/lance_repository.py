@@ -15,9 +15,11 @@ import lancedb
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from pydantic import ValidationError
+
 from core.logging import get_logger
 from db.models import DocumentChunksModel
-from schemas.rag_schemas import Chunk
+from schemas.rag_schemas import Chunk, SearchHit
 
 logger = get_logger(__name__)
 
@@ -242,7 +244,7 @@ class LanceRepository:
         rrf_k: Optional[int] = None,
         conversation_id: Optional[UUID] = None,
         doc_ids: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[SearchHit]:
         """Vector + BM25 candidates fused by RRF, hydrated from sqlite."""
         depth = candidate_k or self.candidate_k
         fusion_k = rrf_k if rrf_k is not None else self.rrf_k
@@ -265,7 +267,7 @@ class LanceRepository:
 
         by_id = {r.id: r for r in rows}
 
-        hits: List[Dict[str, Any]] = []
+        hits: List[SearchHit] = []
 
         for cid, score in merged:
             row = by_id.get(cid)
@@ -273,17 +275,20 @@ class LanceRepository:
             if row is None:
                 continue
 
-            hits.append(
-                {
-                    "id": row.id,
-                    "document_id": sid(row.document_id),
-                    "index": row.index,
-                    "heading": row.heading,
-                    "page": row.page,
-                    "text": row.text,
-                    "score": score,
-                }
-            )
+            try:
+                hits.append(
+                    SearchHit(
+                        id=row.id,
+                        document_id=sid(row.document_id),
+                        index=row.index,
+                        heading=row.heading or "",
+                        page=row.page,
+                        text=row.text,
+                        score=float(score),
+                    )
+                )
+            except ValidationError:
+                logger.warning("Skipping corrupt chunk id=%s", cid, exc_info=True)
 
         logger.debug(
             "hybrid done vec=%s fts=%s hits=%s", len(vector_ids), len(fts_ids), len(hits)
@@ -323,4 +328,4 @@ class LanceRepository:
             except ValueError:
                 raise
             except Exception:
-                pass
+                logger.warning("Vector dim check skipped", exc_info=True)

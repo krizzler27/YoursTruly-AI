@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from pathlib import Path
 
 from config import config
-from core.logging import get_logger
+from core.logging import get_logger, get_request_id
 from schemas.api_schemas import CatalogRequest, ModelDownloadRequest, QuantsRequest, RecommendRequest, SORT_ALIASES
 from services.download_manager import DownloadManager
 from services.llmfit_services import LLMFitServices
@@ -26,7 +26,7 @@ def system_info():
     except FileNotFoundError as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.get('/catalog', status_code=status.HTTP_200_OK)
@@ -60,7 +60,7 @@ def catalog(
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.post('/catalog', status_code=status.HTTP_200_OK)
@@ -84,7 +84,7 @@ def catalog_post(req: CatalogRequest):
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.post('/recommend', status_code=status.HTTP_200_OK)
@@ -111,7 +111,7 @@ def recommend(req: RecommendRequest):
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.post('/models/quants', status_code=status.HTTP_200_OK)
@@ -128,7 +128,7 @@ def list_quants(req: QuantsRequest):
     except RuntimeError as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.get('/models', status_code=status.HTTP_200_OK)
@@ -151,7 +151,7 @@ def models():
         return JSONResponse(content={"models": kv, "details": infos, "path": str(Path(config.LLAMA_MODEL_PATH))})
     except Exception as e:
         return JSONResponse(
-            status_code=500, content={"Exception occured": str(e), "type": type(e).__name__}
+            status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"}
         )
 
 
@@ -173,7 +173,7 @@ async def download_model(req: ModelDownloadRequest):
             return JSONResponse(status_code=409, content={"detail": msg})
         return JSONResponse(status_code=500, content={"detail": msg})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.get('/downloads', status_code=status.HTTP_200_OK)
@@ -184,7 +184,7 @@ async def list_downloads():
         jobs = mgr.list_all()
         return JSONResponse(content={"jobs": jobs})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.get('/downloads/{job_id}', status_code=status.HTTP_200_OK)
@@ -197,7 +197,7 @@ async def get_download(job_id: str):
             return JSONResponse(status_code=404, content={"detail": f"Job not found: {job_id}"})
         return JSONResponse(content=job)
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.delete('/downloads/{job_id}', status_code=status.HTTP_200_OK)
@@ -213,7 +213,7 @@ async def cancel_download(job_id: str):
             return JSONResponse(status_code=400, content={"detail": "Cannot cancel completed/failed job"})
         return JSONResponse(content={"status": "cancelled", "job_id": job_id})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})
 
 
 @router.delete('/models/{filename}', status_code=status.HTTP_200_OK)
@@ -228,4 +228,4 @@ async def delete_model(filename: str):
     except FileNotFoundError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"Exception occured": str(e), "type": type(e).__name__})
+        return JSONResponse(status_code=500, content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"})

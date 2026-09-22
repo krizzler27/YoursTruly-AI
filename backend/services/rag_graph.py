@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
 
-from schemas.rag_schemas import RouteDecision
+from schemas.rag_schemas import RouteDecision, SearchHit
 from core.logging import get_logger
 from services.decider import Decider
 from services.llama_engine import EmbeddingEngine
@@ -25,7 +25,7 @@ class RagState(TypedDict, total=False):
     history: List[Dict[str, str]]
     conversation_id: Optional[uuid.UUID]
     decision: RouteDecision
-    hits: List[Dict[str, Any]]
+    hits: List[SearchHit]
     messages: List[Dict[str, str]]
 
 

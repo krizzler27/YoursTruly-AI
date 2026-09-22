@@ -123,7 +123,7 @@ class IngestJob:
         finally:
             db.close()
 
-    def _drop_stale(db: Session, filename: str, conversation_id: UUID) -> None:
+    def _drop_stale(self, db: Session, filename: str, conversation_id: UUID) -> None:
         """Remove same-name rows that can never go live (pending/indexing/failed)."""
         docs = DocumentRepository(db)
         stale = (
@@ -139,7 +139,7 @@ class IngestJob:
             LanceRepository(db).delete_document(row.id, commit=False)
             docs.delete(row.id)
 
-    def _drop_tmp(tmp: Path) -> None:
+    def _drop_tmp(self, tmp: Path) -> None:
         """Temp uploads die with their job; the canonical copy is separate."""
         try:
             tmp.unlink(missing_ok=True)
@@ -147,7 +147,7 @@ class IngestJob:
             pass
 
     def _mark_failed(
-        db: Session, doc_id: UUID, filename: str, conversation_id: UUID, error: str
+        self, db: Session, doc_id: UUID, filename: str, conversation_id: UUID, error: str
     ) -> None:
         """Mark this job failed, keeping any live same-name version."""
         try:
@@ -194,7 +194,7 @@ class IngestJob:
         except Exception as e:
             logger.warning("failed marker lost: %s", e)
 
-    def _wait_for_idle(timeout_s: int = IDLE_TIMEOUT_S) -> bool:
+    def _wait_for_idle(self, timeout_s: int = IDLE_TIMEOUT_S) -> bool:
         """Hold the worker until chat stops generating."""
         waited = 0
         while LlamaEngine.get_instance("chat").is_generating():
@@ -204,7 +204,7 @@ class IngestJob:
             waited += 2
         return True
 
-    def _write_summary(db: Session, doc: DocumentsModel) -> None:
+    def _write_summary(self, db: Session, doc: DocumentsModel) -> None:
         """One short SLM pass over the head of the doc; extractive fallback."""
         from services.llm_service import LLMService
         from services.prompt_manager import PromptManager
