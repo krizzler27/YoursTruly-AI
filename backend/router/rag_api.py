@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from db.db_engine import get_db
 from core.logging import get_logger, set_conversation_id
 from schemas.rag_schemas import DocumentResponse, SearchHit, SearchRequest
-from services.ingest_queue import queue_depth, submit_ingest
+from services.ingest_job import ingest_job
 from services.ingest_service import SUPPORTED_SUFFIXES, staged_upload_path
 from services.llama_engine import EmbeddingEngine
 from services.rag_service import RagService
@@ -76,15 +76,12 @@ def ingest(
         )
 
     try:
-        doc = submit_ingest(db, tmp_path, filename, conversation_id)
-        logger.info("ingest accepted file=%s depth=%s", filename, queue_depth())
+        doc = ingest_job.submit(db, tmp_path, filename, conversation_id)
+        logger.info("ingest accepted file=%s", filename)
 
         return JSONResponse(
             status_code=202,
-            content={
-                **DocumentResponse.model_validate(doc).model_dump(mode="json"),
-                "queue_depth": queue_depth(),
-            },
+            content=DocumentResponse.model_validate(doc).model_dump(mode="json"),
         )
     except ValueError as e:
         Path(tmp_path).unlink(missing_ok=True)

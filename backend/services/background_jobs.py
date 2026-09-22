@@ -1,8 +1,7 @@
-"""Generic background FIFO: submit fast, one daemon worker drains serially.
+"""A queue drained by one background thread, serially.
 
-Child jobs own their payload and processing. This module only moves
-opaque jobs from submit to a handler, one at a time, with per-job
-error isolation and a worker watchdog that restarts a dead thread.
+Submit returns fast while work happens off the request path.
+The worker invokes one callable per queued item.
 """
 
 import threading
@@ -14,13 +13,13 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 
-class JobRunner:
-    """Single FIFO worker over opaque jobs. Subclass or pass a handler."""
+class BackgroundJobs:
+    """One background thread invoking a callable per queued item."""
 
-    def __init__(self, handler: Callable[[object], None], name: str = "jobs"):
+    def __init__(self, handler: Callable[[object], None], name: str = "jobs", queue: Queue | None = None):
         self._handler = handler
         self._name = name
-        self._jobs: Queue = Queue()
+        self._jobs: Queue = queue or Queue()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
@@ -29,22 +28,13 @@ class JobRunner:
         self.ensure_worker()
         self._jobs.put(job)
 
-    def queue_depth(self) -> int:
-        """Queued jobs behind the running one. Never negative."""
-        return max(0, self._jobs.qsize() - 1)
-
-    @property
-    def queue(self) -> Queue:
-        """Underlying queue, exposed for depth checks and tests."""
-        return self._jobs
-
     def ensure_worker(self) -> None:
         """Start the worker once. Restart it when dead."""
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return
             self._thread = threading.Thread(
-                target=self._worker_loop, name=f"jobrunner-{self._name}", daemon=True
+                target=self._worker_loop, name=f"background-{self._name}", daemon=True
             )
             self._thread.start()
 

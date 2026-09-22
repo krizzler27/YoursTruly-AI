@@ -21,7 +21,7 @@ from db.models import Base, ConversationsModel, DocumentChunksModel, DocumentsMo
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, chunk_id, sid
 from schemas.rag_schemas import Chunk, RouteDecision
-from services import ingest_queue
+import services.ingest_job as ingest_job_mod
 from services.ingest_service import IngestService
 from services.rag_service import RagService, rag_context_tokens
 
@@ -318,8 +318,8 @@ class QueueMechanics(DbCase):
     def drain(self):
         try:
             while True:
-                self.tmp_queue_cleanup.append(ingest_queue._jobs.get_nowait())
-                ingest_queue._jobs.task_done()
+                self.tmp_queue_cleanup.append(ingest_job_mod._jobs.get_nowait())
+                ingest_job_mod._jobs.task_done()
         except Empty:
             pass
 
@@ -330,30 +330,30 @@ class QueueMechanics(DbCase):
 
     def test_submit_rejects_unknown_conversation(self):
         with self.assertRaises(ValueError):
-            ingest_queue.submit_ingest(
+            ingest_job_mod.ingest_job.submit(
                 self.db, self.write(), "a.md", uuid.uuid4()
             )
 
     def test_submit_enqueues_without_lock_error(self):
         cid = self.conv()
-        with patch.object(ingest_queue, "_ensure_worker", lambda: None):
-            d1 = ingest_queue.submit_ingest(self.db, self.write("f1.md"), "f1.md", cid)
-            d2 = ingest_queue.submit_ingest(self.db, self.write("f2.md"), "f2.md", cid)
+        with patch.object(ingest_job_mod._runner, "ensure_worker", lambda: None):
+            d1 = ingest_job_mod.ingest_job.submit(self.db, self.write("f1.md"), "f1.md", cid)
+            d2 = ingest_job_mod.ingest_job.submit(self.db, self.write("f2.md"), "f2.md", cid)
         self.assertEqual(d1.status, "pending")
         self.assertEqual(d2.status, "pending")
-        self.assertEqual(ingest_queue._jobs.qsize(), 2)
+        self.assertEqual(ingest_job_mod._jobs.qsize(), 2)
 
     def test_superseded_job_is_noop(self):
         cid = self.conv()
-        with patch.object(ingest_queue, "SessionLocal", lambda: self.db):
-            ingest_queue._process(
+        with patch.object(ingest_job, "SessionLocal", lambda: self.db):
+            ingest_job_mod.ingest_job.run(
                 (str(uuid.uuid4()), self.write(), "ghost.md", str(cid), "test-req")
             )  # must not raise
 
     def test_failed_marker_visible(self):
         cid = self.conv()
-        with patch.object(ingest_queue, "SessionLocal", lambda: self.db):
-            ingest_queue._mark_failed(
+        with patch.object(ingest_job, "SessionLocal", lambda: self.db):
+            ingest_job_mod.ingest_job._mark_failed(
                 self.db, uuid.uuid4(), "bad.md", cid, "nope"
             )
         row = (
@@ -375,8 +375,8 @@ class QueueMechanics(DbCase):
     def test_submit_keeps_live_index(self):
         cid = self.conv()
         live = self._indexed(cid)
-        with patch.object(ingest_queue, "_ensure_worker", lambda: None):
-            pending = ingest_queue.submit_ingest(
+        with patch.object(ingest_job_mod._runner, "ensure_worker", lambda: None):
+            pending = ingest_job_mod.ingest_job.submit(
                 self.db, self.write("n.md"), "a.md", cid)
         self.assertTrue(pending.filename.startswith("__pending__"))
         self.assertEqual(
@@ -392,7 +392,7 @@ class QueueMechanics(DbCase):
                               status="indexing", conversation_id=cid, summary="")
         self.db.add(temp)
         self.db.commit()
-        ingest_queue._mark_failed(self.db, temp.id, "a.md", cid, "boom")
+        ingest_job_mod.ingest_job._mark_failed(self.db, temp.id, "a.md", cid, "boom")
         self.assertIsNone(
             self.db.query(DocumentsModel).filter_by(id=temp.id).first())
         kept = self.db.query(DocumentsModel).filter_by(id=live.id).one()
@@ -406,18 +406,18 @@ class QueueMechanics(DbCase):
         fake_llm = MagicMock()
         fake_llm.return_value.invoke.return_value = "a short summary"
         canon = Path(self.tmp.name) / "canon.md"
-        with patch.object(ingest_queue, "_ensure_worker", lambda: None), \
-             patch.object(ingest_queue, "EmbeddingEngine", FakeEngineFactory), \
-             patch.object(ingest_queue, "SessionLocal", lambda: self.db), \
-             patch.object(ingest_queue, "LanceRepository",
+        with patch.object(ingest_job_mod._runner, "ensure_worker", lambda: None), \
+             patch.object(ingest_job, "EmbeddingEngine", FakeEngineFactory), \
+             patch.object(ingest_job, "SessionLocal", lambda: self.db), \
+             patch.object(ingest_job, "LanceRepository",
                           lambda db: self.lance()), \
              patch.object(llm_mod, "LLMService", fake_llm), \
              patch.object(ingest_mod, "stored_upload_path",
                           lambda c, f: canon):
             src = self.write("t.md", "hello world " * 100)
-            doc = ingest_queue.submit_ingest(self.db, src, "t.md", cid)
+            doc = ingest_job_mod.ingest_job.submit(self.db, src, "t.md", cid)
             self.drain()  # keep the real worker out of it
-            ingest_queue._process((str(doc.id), src, "t.md", str(cid), "test-req"))
+            ingest_job_mod.ingest_job.run((str(doc.id), src, "t.md", str(cid), "test-req"))
         rows = self.db.query(DocumentsModel).filter(
             DocumentsModel.conversation_id == cid).all()
         self.assertEqual(len(rows), 1)
@@ -425,13 +425,12 @@ class QueueMechanics(DbCase):
             (rows[0].filename, rows[0].status, rows[0].summary),
             ("t.md", "indexed", "a short summary"))
 
-    def test_queue_depth_excludes_self(self):
+    def test_submit_enqueues_two_jobs(self):
         cid = self.conv()
-        with patch.object(ingest_queue, "_ensure_worker", lambda: None):
-            ingest_queue.submit_ingest(self.db, self.write("q1.md"), "q1.md", cid)
-            self.assertEqual(ingest_queue.queue_depth(), 0)
-            ingest_queue.submit_ingest(self.db, self.write("q2.md"), "q2.md", cid)
-            self.assertEqual(ingest_queue.queue_depth(), 1)
+        with patch.object(ingest_job_mod._runner, "ensure_worker", lambda: None):
+            ingest_job_mod.ingest_job.submit(self.db, self.write("q1.md"), "q1.md", cid)
+            ingest_job_mod.ingest_job.submit(self.db, self.write("q2.md"), "q2.md", cid)
+            self.assertEqual(ingest_job_mod._jobs.qsize(), 2)
 
 
 class AppContract(unittest.TestCase):
