@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
 
-from schemas.rag_schemas import RouteDecision
+from schemas.rag_schemas import RouteDecision, SearchHit
 from core.logging import get_logger
 from services.decider import Decider
 from services.llama_engine import EmbeddingEngine
@@ -25,7 +25,7 @@ class RagState(TypedDict, total=False):
     history: List[Dict[str, str]]
     conversation_id: Optional[uuid.UUID]
     decision: RouteDecision
-    hits: List[Dict[str, Any]]
+    hits: List[SearchHit]
     messages: List[Dict[str, str]]
 
 
@@ -40,10 +40,10 @@ class RagGraph:
         llm: Optional[LLMService] = None,
         top_k: int = 5,
     ):
-        # Fresh embedder per graph: unloaded after the run so only one
+        # Shared embed slot per graph: unloaded after the run so only one
         # model is resident on the 8GB box. Injected fakes skip this.
         self._owns_engine = rag is None
-        engine = EmbeddingEngine() if self._owns_engine else None
+        engine = EmbeddingEngine.get_instance("embed") if self._owns_engine else None
         self.rag = rag or RagService(db, engine=engine)
         self.decider = decider or Decider(db)
         self.llm = llm or LLMService()

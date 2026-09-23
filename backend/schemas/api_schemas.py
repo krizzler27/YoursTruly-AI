@@ -36,7 +36,7 @@ class ConversationResponse(BaseModel):
 class MessageResponse(BaseModel):
     id: uuid.UUID
     conversation_id: uuid.UUID
-    role: str
+    role: Literal["user", "assistant", "system"]
     content: str
     created_at: datetime
 
@@ -98,7 +98,7 @@ class CatalogRequest(BaseModel):
     """POST /api/catalog - replaces GET query with typed body. Defaults = trusted-only, perfect only."""
 
     limit: int = Field(default=20, ge=1, le=100, description="max models returned")
-    sort: str = Field(default="score", description="score|tps|mem (vram alias supported)")
+    sort: Literal["score", "tps", "mem"] = Field(default="score", description="score|tps|mem (vram alias supported)")
     providers: Optional[List[str]] = Field(default=None, description="null = trusted default, [] = trusted (shim), [meta,google] = filter")
     perfect_only: bool = Field(default=True)
     include_community: bool = Field(default=False)

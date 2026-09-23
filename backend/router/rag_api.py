@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from db.db_engine import get_db
-from core.logging import get_logger, set_conversation_id
+from core.logging import get_logger, get_request_id, set_conversation_id
 from schemas.rag_schemas import DocumentResponse, SearchHit, SearchRequest
-from services.ingest_queue import queue_depth, submit_ingest
+from services.ingest_job import ingest_job
 from services.ingest_service import SUPPORTED_SUFFIXES, staged_upload_path
 from services.llama_engine import EmbeddingEngine
 from services.rag_service import RagService
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api", tags=["RAG"])
 @router.post("/search", response_model=List[SearchHit])
 def search(req: SearchRequest, db: Session = Depends(get_db)):
     """Hybrid search - sync def runs in threadpool, embed is blocking."""
-    engine = EmbeddingEngine()
+    engine = EmbeddingEngine.get_instance("embed")
     try:
         svc = RagService(db, engine=engine)
         return svc.search(req.query, top_k=req.top_k, conversation_id=req.conversation_id)
@@ -34,7 +34,7 @@ def search(req: SearchRequest, db: Session = Depends(get_db)):
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
     finally:
         engine.unload()
@@ -72,19 +72,16 @@ def ingest(
         Path(tmp_path).unlink(missing_ok=True)
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
 
     try:
-        doc = submit_ingest(db, tmp_path, filename, conversation_id)
-        logger.info("ingest accepted file=%s depth=%s", filename, queue_depth())
+        doc = ingest_job.submit(db, tmp_path, filename, conversation_id)
+        logger.info("ingest accepted file=%s", filename)
 
         return JSONResponse(
             status_code=202,
-            content={
-                **DocumentResponse.model_validate(doc).model_dump(mode="json"),
-                "queue_depth": queue_depth(),
-            },
+            content=DocumentResponse.model_validate(doc).model_dump(mode="json"),
         )
     except ValueError as e:
         Path(tmp_path).unlink(missing_ok=True)
@@ -96,7 +93,7 @@ def ingest(
         Path(tmp_path).unlink(missing_ok=True)
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
 
 
@@ -112,7 +109,7 @@ def list_documents(
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )
 
 
@@ -136,5 +133,5 @@ def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db)):
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"Exception occured": str(e), "type": type(e).__name__},
+            content={"error": str(e), "type": type(e).__name__, "request_id": get_request_id(), "hint": "Retry, or quote request_id when reporting"},
         )

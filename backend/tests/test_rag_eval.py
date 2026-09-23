@@ -1,6 +1,6 @@
 """Whole-RAG eval on 10 sampled Qs through prod code paths only.
 
-Per doc: bytes -> staged_upload_path -> submit_ingest -> real queue
+Per doc: bytes -> staged_upload_path -> ingest_job.submit -> real queue
 worker (summaries included) -> poll until indexed.
 Per question: RagGraph.run (real SLM gate, real search, real build)
 -> live generation with prod params (temp by route, repeat 1.1).
@@ -8,7 +8,7 @@ Per question: RagGraph.run (real SLM gate, real search, real build)
 Isolation: temp file SQLite + temp LanceDB + one random conversation
 dir under the real docs root (removed at teardown). Two documented
 seams (worker import-time globals that must point at temp):
-ingest_queue.SessionLocal, ingest_queue.LanceRepository.
+ingest_job.SessionLocal, ingest_job.LanceRepository.
 LLAMA_MODEL_PATH stays real so engines resolve their GGUFs.
 All logic executed is unmodified prod code.
 
@@ -38,7 +38,7 @@ from sqlalchemy.orm import sessionmaker
 
 from db.models import Base, ConversationsModel, DocumentsModel
 from repository.lance_repository import LanceRepository as RealLance
-from services import ingest_queue
+from services import ingest_job
 from services.ingest_service import staged_upload_path, stored_upload_path
 from services.llama_engine import EmbeddingEngine
 from services.rag_graph import RagGraph
@@ -122,16 +122,16 @@ class WholeRagEval(unittest.TestCase):
         # chat engine resolve their GGUFs; eval files live under one
         # random conversation dir, removed at teardown.
         cls._patches = [
-            patch.object(ingest_queue, "SessionLocal", cls.TestSessions),
+            patch.object(ingest_job, "SessionLocal", cls.TestSessions),
             patch.object(
-                ingest_queue, "LanceRepository",
+                ingest_job, "LanceRepository",
                 lambda db: RealLance(db, base_dir=cls.lance_dir),
             ),
         ]
         for p in cls._patches:
             p.start()
         cls.addClassCleanup(lambda: [p.stop() for p in cls._patches])
-        cls.embed = EmbeddingEngine()
+        cls.embed = EmbeddingEngine.get_instance("embed")
         cls.addClassCleanup(cls.embed.unload)
 
         cls.conv = uuid.uuid4()
@@ -168,7 +168,7 @@ class WholeRagEval(unittest.TestCase):
             assert src.exists(), f"missing doc: {src}"
             staged = staged_upload_path(cls.conv, name)
             staged.write_bytes(src.read_bytes())
-            ingest_queue.submit_ingest(cls.db, str(staged), name, cls.conv)
+            ingest_job.ingest_job.submit(cls.db, str(staged), name, cls.conv)
 
         deadline = time.time() + INGEST_DEADLINE_S
         while True:

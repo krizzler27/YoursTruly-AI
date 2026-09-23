@@ -1,7 +1,7 @@
 """RAG read path + document lifecycle (ingest writes live in IngestService)."""
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -10,7 +10,9 @@ from core.logging import get_logger
 from core.trace import traceable
 from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, sid
-from services.llama_engine import EmbeddingEngine, get_default_ctx
+from schemas.rag_schemas import SearchHit
+from services.llama_engine import EmbeddingEngine
+from config import config
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
 
@@ -23,7 +25,7 @@ HISTORY_CHAR_CAP = 3000
 
 def rag_context_tokens(n_ctx: Optional[int] = None) -> int:
     """Retrieved-context budget derived from the chat window, never fixed."""
-    window = n_ctx or get_default_ctx()
+    window = n_ctx or config.EFFECTIVE_N_CTX
     return max(256, window - ANSWER_RESERVE_TOKENS - HISTORY_CHAR_CAP // CHARS_PER_TOKEN)
 
 
@@ -38,14 +40,14 @@ class RagService:
         docs: Optional[DocumentRepository] = None,
     ):
         self.db = db
-        self.engine = engine or EmbeddingEngine.get_instance()
+        self.engine = engine or EmbeddingEngine.get_instance("embed")
         self.lance = lance or LanceRepository(db)
         self.docs = docs or DocumentRepository(db)
 
     @traceable(name="rag.search")
     def search(
         self, query: str, top_k: int = 5, conversation_id: Optional[uuid.UUID] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> List[SearchHit]:
         """Embed the query, fuse vector + BM25 candidates, hydrate hits."""
         clean = (query or "").strip()
 
@@ -75,7 +77,7 @@ class RagService:
 
     def list_documents(
         self, limit: int = 100, conversation_id: Optional[uuid.UUID] = None
-    ) -> List[Any]:
+    ) -> List[DocumentsModel]:
         """List ingested files newest first, optionally one chat's."""
         if conversation_id is None:
             return self.docs.list_recent(limit=limit)
@@ -127,7 +129,7 @@ class RagService:
     def build_messages(
         self,
         query: str,
-        hits: Optional[List[Dict[str, Any]]] = None,
+        hits: Optional[List[SearchHit]] = None,
         history: Optional[List[Dict[str, str]]] = None,
         max_context_tokens: Optional[int] = None,
     ) -> List[Dict[str, str]]:
@@ -141,21 +143,21 @@ class RagService:
         blocks = []
         used = 0
 
-        ordered = sorted(hits, key=lambda x: x.get("score", 0.0), reverse=True)
-        names = self._filenames(h.get("document_id") for h in ordered)
+        ordered = sorted(hits, key=lambda x: x.score, reverse=True)
+        names = self._filenames(h.document_id for h in ordered)
 
         for h in ordered:
-            name = names.get(str(h.get("document_id", "")), str(h.get("document_id", "")))
+            name = names.get(h.document_id, h.document_id)
 
-            heading = (h.get("heading") or "").strip()
-            page = h.get("page")
+            heading = (h.heading or "").strip()
+            page = h.page
             if heading:
                 label = f"{name}:{heading}"
             elif page is not None:
                 label = f"{name}:p{page}"
             else:
                 label = name
-            text = (h.get("text") or "").strip()
+            text = (h.text or "").strip()
             block = f"[{label}]\n{text}"
             room = budget - used
             if room <= 0:

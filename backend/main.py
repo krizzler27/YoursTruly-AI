@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
 
     try:
-        LlamaEngine.get_instance().load()
+        LlamaEngine.get_instance("chat").load()
         logger.info("Chat Model loaded")
     except Exception as e:
         logger.warning("model load skipped: %s", e)
@@ -32,9 +32,9 @@ async def lifespan(app: FastAPI):
     yield
 
     try:
-        LlamaEngine.get_instance().unload()
+        LlamaEngine.get_instance("chat").unload()
     except Exception:
-        pass
+        logger.warning("Shutdown model unload failed", exc_info=True)
     logger.info("shutdown")
 
 
@@ -65,7 +65,7 @@ app.include_router(rag_api.router)
 @app.get("/api/health", status_code=status.HTTP_200_OK)
 async def health() -> JSONResponse:
     try:
-        h = LlamaEngine.get_instance().health()
+        h = LlamaEngine.get_instance("chat").health()
         status_str = h.get("status", "error")
         is_healthy = status_str == "ready"
         return JSONResponse(content={

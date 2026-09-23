@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -11,7 +11,7 @@ class Chunk(BaseModel):
     text: str
     heading: str = ""
     index: int = 0
-    page: Optional[int] = None
+    page: Optional[Annotated[int, Field(ge=0)]] = None
     vector: List[float] = Field(default_factory=list)
 
     @field_validator("text")
@@ -50,7 +50,7 @@ class SearchHit(BaseModel):
     document_id: str
     index: int = 0
     heading: str = ""
-    page: Optional[int] = None
+    page: Optional[Annotated[int, Field(ge=0)]] = None
     text: str
     score: float = 0.0
 
@@ -63,12 +63,11 @@ class DocumentResponse(BaseModel):
     id: uuid.UUID
     filename: str
     chunk_count: int = 0
-    status: str = "pending"
+    status: Literal["pending", "indexing", "indexed", "failed"] = "pending"
     conversation_id: Optional[uuid.UUID] = None
     summary: str = ""
     created_at: datetime
     updated_at: datetime
-    queue_depth: int = 0  # jobs ahead in the ingest queue (202 only)
 
     model_config = {"from_attributes": True}
 
