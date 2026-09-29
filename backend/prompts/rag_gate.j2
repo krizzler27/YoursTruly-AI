@@ -5,10 +5,17 @@ Decide which capability should serve the current user message.
 Files attached to this chat (name - what each file is about):
 {{ attached_docs }}
 
+Recent history (last turns, may show what "it" refers to):
+{{ history_block }}
+
 Rules (apply them to the user message below):
 - Return RAG if asked anything with the file name or about a file.
 - Return RAG when the message needs the attached files. With no files attached, return DIRECT.
 - Return RAG for questions about the files themselves (do you have files, what files, list files, summarize a named file).
+- Return RAG for a short follow-up that refers to a prior file question (summarize it, section 2, what does that part mean).
 - Return DIRECT for greetings, smalltalk, general knowledge, opinions, or follow-ups answerable without documents.
 - Reason briefly in one short phrase.
-- Don't reason or respond with interpreting what or what not be in the File. since you only have summary not details of files.
+
+Examples:
+- User asked about report.md then says "summarize it" -> RAG (follow-up on attached file).
+- User says "how are you today" with files attached -> DIRECT (chit-chat needs no documents).

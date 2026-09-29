@@ -314,6 +314,84 @@ class DeciderRecovery(unittest.TestCase):
         llm.invoke.assert_not_called()
 
 
+class DeciderHistory(unittest.TestCase):
+    def decider(self, llm):
+        from services.decider import Decider
+
+        db = MagicMock()
+        docs = MagicMock()
+        docs.list_by_conversation.return_value = [MagicMock(filename="report.md", summary="s")]
+        d = Decider(db=db, llm=llm)
+        d.docs = docs
+        return d
+
+    def test_followup_without_filename_stays_rag(self):
+        llm = MagicMock()
+        d = self.decider(llm)
+        history = [
+            {"role": "user", "content": "what is in report.md?"},
+            {"role": "assistant", "content": "it covers sales"},
+        ]
+        out = d.decide("summarize it", uuid.uuid4(), history=history)
+        self.assertEqual(out.route, "RAG")
+        llm.invoke.assert_not_called()
+
+    def test_section_followup_stays_rag(self):
+        llm = MagicMock()
+        d = self.decider(llm)
+        history = [
+            {"role": "user", "content": "what is in report.md?"},
+            {"role": "assistant", "content": "it covers sales"},
+        ]
+        out = d.decide("what about section 2", uuid.uuid4(), history=history)
+        self.assertEqual(out.route, "RAG")
+        llm.invoke.assert_not_called()
+
+    def test_chitchat_with_inventory_stays_direct(self):
+        from services.decider import RouteDecision as RD
+
+        llm = MagicMock()
+        llm.invoke.return_value = RD(route="DIRECT", reason="chit-chat")
+        d = self.decider(llm)
+        history = [
+            {"role": "user", "content": "what is in report.md?"},
+            {"role": "assistant", "content": "it covers sales"},
+        ]
+        out = d.decide("how are you today", uuid.uuid4(), history=history)
+        self.assertEqual(out.route, "DIRECT")
+        llm.invoke.assert_called_once()
+
+    def test_needs_memory_stub_keywords(self):
+        from services.decider import needs_memory
+
+        self.assertFalse(needs_memory("how are you today"))
+        self.assertTrue(needs_memory("please remember my birthday"))
+        self.assertTrue(needs_memory("call me Ash"))
+        self.assertTrue(needs_memory("my name is Ada"))
+
+    def test_graph_forwards_last_two_history(self):
+        from services.rag_graph import RagGraph
+
+        db = MagicMock()
+        rag = MagicMock()
+        rag.search.return_value = []
+        llm = MagicMock()
+        llm.build_chat_messages.side_effect = lambda h, q: [
+            {"role": "user", "content": q}
+        ]
+        decider = MagicMock()
+        decider.decide.return_value = RouteDecision(route="DIRECT", reason="t")
+        g = RagGraph(db=db, rag=rag, decider=decider, llm=llm)
+        history = [
+            {"role": "user", "content": "one"},
+            {"role": "user", "content": "two"},
+            {"role": "user", "content": "three"},
+        ]
+        g.run("hi", history, uuid.uuid4())
+        _, kwargs = decider.decide.call_args
+        self.assertEqual(kwargs.get("history"), history[-2:])
+
+
 class QueueMechanics(DbCase):
     def drain(self):
         try:

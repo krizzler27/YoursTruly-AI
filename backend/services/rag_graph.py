@@ -104,8 +104,11 @@ class RagGraph:
 
     def _decide(self, state: RagState) -> Dict[str, Any]:
         try:
+            history = state.get("history") or []
             decision = self.decider.decide(
-                state.get("query", ""), state.get("conversation_id")
+                state.get("query", ""),
+                state.get("conversation_id"),
+                history=history[-2:],
             )
         except Exception as e:
             logger.warning("Decider failed - falling back to DIRECT: %s", e)
