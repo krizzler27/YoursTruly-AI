@@ -23,6 +23,20 @@ from services.rag_service import RagService
 logger = get_logger(__name__)
 
 
+def _combine_memory(sem_text: str, ep_texts: Optional[List[str]]) -> str:
+    """One memory block inside mem_cap, semantic first, episodic remainder."""
+    from core.context_budget import count_tokens, truncate_text
+
+    cap = config.EFFECTIVE_MEMORY_TOKENS
+    sem_block = truncate_text((sem_text or "").strip(), cap) if (sem_text or "").strip() else ""
+    used = count_tokens(sem_block) if sem_block else 0
+    rest = max(0, cap - used)
+    ep_lines = [f"earlier: {(s or '').strip()}" for s in ep_texts or [] if (s or "").strip()]
+    ep_joined = "\n".join(ep_lines).strip()
+    ep_block = truncate_text(ep_joined, rest) if ep_joined and rest > 0 else ""
+    return "\n".join(p for p in (sem_block, ep_block) if p).strip()
+
+
 class RagState(TypedDict, total=False):
     query: str
     history: List[Dict[str, str]]
@@ -146,19 +160,33 @@ class RagGraph:
 
         return {"hits": hits, "decision": decision}
 
-    def _memory_text(self, query: str) -> Optional[str]:
-        """Relevant semantic facts as key: value lines, None when none."""
+    def _memory_text(
+        self, query: str, conversation_id: Optional[uuid.UUID] = None
+    ) -> Optional[str]:
+        """Semantic facts plus episodic summaries in one block, None when none."""
         try:
             rows = SemanticMemoryRepository(self.rag.db).find_relevant(query, limit=5)
         except Exception as e:
             logger.debug("memory recall skipped: %s", e)
-            return None
+            rows = []
         lines = [
             f"{r.key}: {r.value}"
             for r in rows or []
             if (getattr(r, "value", "") or "").strip()
         ]
-        text = "\n".join(lines).strip()
+        sem_text = "\n".join(lines).strip()
+        ep_texts: List[str] = []
+        if conversation_id is not None:
+            try:
+                from services.episodic_service import EpisodicService
+
+                ep_texts = EpisodicService(self.rag.db).recall(
+                    conversation_id, query, limit=3
+                )
+            except Exception as e:
+                logger.debug("episodic recall skipped, semantic-only: %s", e)
+                ep_texts = []
+        text = _combine_memory(sem_text, ep_texts)
         return text or None
 
     def _build(self, state: RagState) -> Dict[str, List[Dict[str, str]]]:
@@ -166,7 +194,7 @@ class RagGraph:
         history = state.get("history", [])
         decision = state.get("decision")
         hits = state.get("hits", [])
-        memory_text = self._memory_text(query)
+        memory_text = self._memory_text(query, state.get("conversation_id"))
 
         if decision is not None and decision.route == "RAG" and hits:
             messages = self.rag.build_messages(

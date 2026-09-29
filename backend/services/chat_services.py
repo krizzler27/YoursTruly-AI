@@ -67,9 +67,32 @@ class ChatServices:
                 rag.delete_document(doc.id)
             except ValueError:
                 pass  # already gone
+        try:
+            from repository.episodic_repository import EpisodicMemoryRepository
+
+            EpisodicMemoryRepository(self.db).delete_by_conversation(conversation_id)
+        except Exception as e:
+            logger.debug("episodic cleanup skipped: %s", e)
         ok = self.chat_repo.delete(conversation_id)
         if not ok:
             raise ValueError(f"Conversation {conversation_id} not found")
+
+    def maybe_rollup(self, conversation_id: uuid.UUID) -> Optional[str]:
+        """Persist an episodic summary when triggered; fail-open, never raises."""
+        try:
+            history = self.get_history(conversation_id, limit=100)
+            if len(history) <= 2:
+                return None
+            from core.context_budget import allocate
+            from services.episodic_service import EpisodicService
+
+            usable = allocate(route="DIRECT", needs_memory=False, query_tokens=0)["usable"]
+            return EpisodicService(self.db).rollup_if_needed(
+                conversation_id, history, usable
+            )
+        except Exception as e:
+            logger.debug("episodic rollup skipped: %s", e)
+            return None
 
     def get_history(self, conversation_id: uuid.UUID, limit: int = 5) -> List[dict]:
         """Return last `limit` messages as LLM-ready dicts."""

@@ -105,6 +105,11 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
                 except Exception:
                     logger.error("Assistant reply shown but not saved, conversation=%s", conversation.id, exc_info=True)
                     yield f"data: {json.dumps({'warning': 'not saved'})}\n\n"
+                else:
+                    try:
+                        chat_service.maybe_rollup(conversation.id)
+                    except Exception:
+                        logger.debug("maybe_rollup failed, conversation=%s", conversation.id)
 
             yield "data: [DONE]\n\n"
 

@@ -1,5 +1,5 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-from sqlalchemy import func, ForeignKey, UniqueConstraint
+from sqlalchemy import func, ForeignKey, Index, UniqueConstraint
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -87,3 +87,24 @@ class SemanticMemoryModel(Base, TimestampMixin):
     )
     key: Mapped[str] = mapped_column(index=True, unique=True)
     value: Mapped[str] = mapped_column(default="")
+
+
+class EpisodicMemoryModel(Base, TimestampMixin):
+    """Summarized older turns per chat - episodic recall window."""
+
+    __tablename__ = "episodic_memory"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid6.uuid7
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    summary: Mapped[str] = mapped_column(default="")
+    turn_start: Mapped[int] = mapped_column(default=0)
+    turn_end: Mapped[int] = mapped_column(default=0)
+
+    __table_args__ = (
+        Index("ix_episodic_memory_conversation_created", "conversation_id", "created_at"),
+    )
