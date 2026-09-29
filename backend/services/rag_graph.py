@@ -11,6 +11,8 @@ from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
 
 from schemas.rag_schemas import RouteDecision, SearchHit
+from config import config
+from core.context_budget import top_k_for_ctx
 from core.logging import get_logger
 from services.decider import Decider
 from services.llama_engine import EmbeddingEngine
@@ -38,7 +40,7 @@ class RagGraph:
         rag: Optional[RagService] = None,
         decider: Optional[Decider] = None,
         llm: Optional[LLMService] = None,
-        top_k: int = 5,
+        top_k: Optional[int] = None,
     ):
         # Shared embed slot per graph: unloaded after the run so only one
         # model is resident on the 8GB box. Injected fakes skip this.
@@ -47,7 +49,7 @@ class RagGraph:
         self.rag = rag or RagService(db, engine=engine)
         self.decider = decider or Decider(db)
         self.llm = llm or LLMService()
-        self.top_k = top_k
+        self.top_k = top_k if top_k is not None else top_k_for_ctx(config.EFFECTIVE_N_CTX)
 
         graph = StateGraph(RagState)
         graph.add_node("decide", self._decide)

@@ -41,6 +41,18 @@ class Config(BaseSettings):
     LLAMA_N_GPU_LAYERS: Optional[int] = None  # auto: -1 Vulkan else 0
     DATABASE_URL: str = "sqlite+pysqlite:///yourstrulyai.db"
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"  # dev console verbosity; silent in frozen exe
+    SAFETY_MARGIN: int = 256  # tokens held back from every window
+    ANSWER_RESERVE_4K: int = 512  # decode headroom on the 4096 bin
+    ANSWER_RESERVE_8K: int = 768  # decode headroom on the 8192 bin
+    RAG_MAX_SHARE_4K: float = 0.7  # RAG fraction of usable on 4096
+    RAG_MAX_SHARE_8K: float = 0.6  # RAG fraction of usable on 8192
+    HISTORY_MAX_SHARE_4K: float = 0.9  # history fraction of usable on 4096
+    HISTORY_MAX_SHARE_8K: float = 0.8  # history fraction of usable on 8192
+    MEMORY_MAX_TOKENS_4K: int = 300  # memory carve-out on 4096
+    MEMORY_MAX_TOKENS_8K: int = 500  # memory carve-out on 8192
+    SUMMARY_TRIGGER: float = 0.85  # usable fraction that triggers episodic write
+    SUMMARY_TIMEOUT_S: int = 30  # summary call budget before truncate fallback
+    SUMMARY_MODEL_ROLE: str = "chat"  # summary slot until worker lands
 
     @property
     def IS_DEV(self) -> bool:
@@ -60,6 +72,26 @@ class Config(BaseSettings):
         if self.LLAMA_N_THREADS is not None:
             return int(self.LLAMA_N_THREADS)
         return physical_cores()
+
+    @property
+    def EFFECTIVE_ANSWER_RESERVE(self) -> int:
+        """Decode headroom for the active window bin."""
+        return self.ANSWER_RESERVE_8K if self.EFFECTIVE_N_CTX >= 8192 else self.ANSWER_RESERVE_4K
+
+    @property
+    def EFFECTIVE_RAG_SHARE(self) -> float:
+        """RAG fraction of usable tokens for the active bin."""
+        return self.RAG_MAX_SHARE_8K if self.EFFECTIVE_N_CTX >= 8192 else self.RAG_MAX_SHARE_4K
+
+    @property
+    def EFFECTIVE_HISTORY_SHARE(self) -> float:
+        """History fraction of usable tokens for the active bin."""
+        return self.HISTORY_MAX_SHARE_8K if self.EFFECTIVE_N_CTX >= 8192 else self.HISTORY_MAX_SHARE_4K
+
+    @property
+    def EFFECTIVE_MEMORY_TOKENS(self) -> int:
+        """Memory carve-out for the active window bin."""
+        return self.MEMORY_MAX_TOKENS_8K if self.EFFECTIVE_N_CTX >= 8192 else self.MEMORY_MAX_TOKENS_4K
 
     @property
     def EFFECTIVE_CHAT_MODEL(self) -> str:

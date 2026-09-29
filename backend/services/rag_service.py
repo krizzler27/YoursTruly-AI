@@ -12,21 +12,22 @@ from repository.document_repository import DocumentRepository
 from repository.lance_repository import LanceRepository, sid
 from schemas.rag_schemas import SearchHit
 from services.llama_engine import EmbeddingEngine
-from config import config
+from core.context_budget import (
+    allocate,
+    count_tokens,
+    fit_history,
+    fit_hits,
+    rag_context_tokens as _derived_rag_tokens,
+)
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
 
 logger = get_logger(__name__)
 
-CHARS_PER_TOKEN = 4  # heuristic until engine-side token counting lands
-ANSWER_RESERVE_TOKENS = 512
-HISTORY_CHAR_CAP = 3000
-
 
 def rag_context_tokens(n_ctx: Optional[int] = None) -> int:
     """Retrieved-context budget derived from the chat window, never fixed."""
-    window = n_ctx or config.EFFECTIVE_N_CTX
-    return max(256, window - ANSWER_RESERVE_TOKENS - HISTORY_CHAR_CAP // CHARS_PER_TOKEN)
+    return _derived_rag_tokens(n_ctx)
 
 
 class RagService:
@@ -136,17 +137,46 @@ class RagService:
         """One builder: plain chat without hits, grounded prompt with hits."""
         clean = (query or "").strip()
         if not hits:
-            return LLMService.build_chat_messages(history, clean)
+            budget = allocate(
+                route="DIRECT", query_tokens=count_tokens(clean)
+            )
+            fitted_history, truncated, hist_used = fit_history(
+                history or [], budget["history_cap"]
+            )
+            logger.info(
+                "budget total=%s usable=%s history=%s rag=%s mem=%s route=%s overflow=%s",
+                budget["total"],
+                budget["usable"],
+                hist_used,
+                0,
+                budget["mem_cap"],
+                "DIRECT",
+                truncated,
+            )
+            return LLMService.build_chat_messages(fitted_history, clean)
 
         logger.debug("build grounded hits=%s", len(hits))
-        budget = (max_context_tokens or rag_context_tokens()) * CHARS_PER_TOKEN
+        budget = allocate(route="RAG", query_tokens=count_tokens(clean))
+        rag_cap = max_context_tokens or budget["rag_cap"]
+        fitted, hits_truncated, rag_used = fit_hits(hits, rag_cap)
+        fitted_history, hist_truncated, hist_used = fit_history(
+            history or [], budget["history_cap"]
+        )
+        overflow = bool(hits_truncated or hist_truncated)
+        logger.info(
+            "budget total=%s usable=%s history=%s rag=%s mem=%s route=%s overflow=%s",
+            budget["total"],
+            budget["usable"],
+            hist_used,
+            rag_used,
+            budget["mem_cap"],
+            "RAG",
+            overflow,
+        )
+        names = self._filenames(h.document_id for h in fitted)
+
         blocks = []
-        used = 0
-
-        ordered = sorted(hits, key=lambda x: x.score, reverse=True)
-        names = self._filenames(h.document_id for h in ordered)
-
-        for h in ordered:
+        for h in fitted:
             name = names.get(h.document_id, h.document_id)
 
             heading = (h.heading or "").strip()
@@ -158,24 +188,17 @@ class RagService:
             else:
                 label = name
             text = (h.text or "").strip()
-            block = f"[{label}]\n{text}"
-            room = budget - used
-            if room <= 0:
-                break
-            blocks.append(block[:room])
-            used += len(blocks[-1])
-            if len(block) > room:
-                break  # straddler truncated, budget spent
+            blocks.append(f"[{label}]\n{text}")
 
         context_block = "\n\n".join(blocks)
 
-        if not history:
+        if not fitted_history:
             history_block = "No prior conversation."
         else:
             history_block = "\n".join(
                 f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')}"
-                for m in history
-            )[:HISTORY_CHAR_CAP]
+                for m in fitted_history
+            )
 
         system_content = PromptManager.render(
             "rag_answer.j2",
