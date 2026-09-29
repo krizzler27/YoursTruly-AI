@@ -24,6 +24,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
 
     try:
+        # Chat slot only; the worker slot stays lazy (load on demand, unload after).
         LlamaEngine.get_instance("chat").load()
         logger.info("Chat Model loaded")
     except Exception as e:

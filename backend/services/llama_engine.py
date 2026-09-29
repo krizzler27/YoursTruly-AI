@@ -53,7 +53,10 @@ class LlamaEngine:
         """Singleton slot per role. Creates empty, never loads."""
         with cls._lock:
             if role not in cls._instances:
-                cls._instances[role] = cls(model_path=model_path, role=role)
+                if role == "worker" and cls is LlamaEngine:
+                    cls._instances[role] = WorkerEngine(model_path=model_path, role=role)
+                else:
+                    cls._instances[role] = cls(model_path=model_path, role=role)
             return cls._instances[role]
 
     def is_loaded(self) -> bool:
@@ -231,3 +234,123 @@ class EmbeddingEngine(LlamaEngine):
             for vec in out:
                 vectors.append(list(vec))
         return vectors
+
+
+def resolve_worker_model_path() -> tuple:
+    """Worker GGUF pick: explicit knob, else newest small qwen, else chat path.
+
+    Returns (path, is_fallback) where fallback means the chat model path,
+    used on 8GB boxes or when no worker GGUF is installed. Pure path
+    resolution, never loads weights.
+    """
+    explicit = getattr(config, "LLAMA_WORKER_MODEL", None)
+    if explicit and str(explicit).strip():
+        hits = list_models("chat", name=str(explicit).strip())
+        if hits:
+            return str(hits[0]), False
+        p = Path(str(explicit).strip())
+        if p.is_file():
+            return str(p), False
+    try:
+        cands = list_models("chat") or []
+    except Exception:
+        cands = []
+    for p in cands:
+        n = p.name.lower()
+        if "qwen" in n and ("1.5" in n or "1_5" in n or "1b" in n):
+            return str(p), False
+    for p in cands:
+        if "qwen" in p.name.lower():
+            return str(p), False
+    return str(config.EFFECTIVE_CHAT_MODEL), True
+
+
+class WorkerEngine(LlamaEngine):
+    """Small-model slot (qwen1.5B instruct Q4_K_M) for background summaries.
+
+    Load on demand, unload after - same transient pattern as EmbeddingEngine
+    in RagGraph. Never preloaded in main lifespan; the chat slot stays
+    resident while this one comes and goes.
+    """
+
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        role: Optional[str] = None,
+    ):
+        super().__init__(model_path=model_path, role=role or "worker")
+        self.is_fallback_path = False
+
+    @classmethod
+    def get_instance(
+        cls, role: str = "worker", model_path: Optional[str] = None
+    ) -> "WorkerEngine":
+        """Singleton slot per role, shared with the base registry."""
+        if role != "worker":
+            return LlamaEngine.get_instance(role=role, model_path=model_path)
+        with LlamaEngine._lock:
+            if role not in LlamaEngine._instances:
+                LlamaEngine._instances[role] = WorkerEngine(
+                    model_path=model_path, role=role
+                )
+            inst = LlamaEngine._instances[role]
+            if not isinstance(inst, WorkerEngine):
+                inst = WorkerEngine(model_path=model_path, role=role)
+                LlamaEngine._instances[role] = inst
+            return inst
+
+    def load(self) -> None:
+        """Load the resolved worker GGUF, else the chat path as fallback."""
+        if self.is_loaded():
+            return
+        if self.model_path and Path(self.model_path).exists():
+            mp = Path(self.model_path)
+            self.is_fallback_path = False
+        else:
+            mp, fallback = resolve_worker_model_path()
+            mp = Path(mp)
+            self.is_fallback_path = fallback
+        self.model_path = str(mp)
+
+        cores = config.EFFECTIVE_N_THREADS
+        ctx = config.EFFECTIVE_N_CTX
+        logger.info(
+            "Worker model loaded - %s (fallback=%s ctx=%s)",
+            mp.name,
+            self.is_fallback_path,
+            ctx,
+        )
+        common_kwargs = dict(
+            model_path=str(mp),
+            n_ctx=ctx,
+            n_threads=cores,
+            n_threads_batch=cores,
+            n_batch=512,
+            n_ubatch=256,
+            type_k=llama_cpp.GGML_TYPE_Q4_0,
+            type_v=llama_cpp.GGML_TYPE_Q4_0,
+            flash_attn=True,
+            use_mmap=True,
+            use_mlock=False,
+            verbose=False,
+        )
+        gpu_layers = config.LLAMA_N_GPU_LAYERS
+        if gpu_layers is None:
+            try:
+                self.llm = Llama(n_gpu_layers=-1, **common_kwargs)
+            except Exception:
+                logger.warning("GPU load failed, retrying on CPU", exc_info=True)
+                self.llm = Llama(n_gpu_layers=0, **common_kwargs)
+        else:
+            self.llm = Llama(n_gpu_layers=int(gpu_layers), **common_kwargs)
+
+        try:
+            list(
+                self.llm.create_chat_completion(
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=1,
+                    stream=False,
+                )
+            )
+        except Exception:
+            logger.warning("Model warmup probe failed for %s", mp.name, exc_info=True)

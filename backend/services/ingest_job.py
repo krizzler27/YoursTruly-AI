@@ -195,7 +195,13 @@ class IngestJob:
             logger.warning("failed marker lost: %s", e)
 
     def _wait_for_idle(self, timeout_s: int = IDLE_TIMEOUT_S) -> bool:
-        """Hold the worker until chat stops generating."""
+        """Hold the worker until chat stops generating.
+
+        Ingest docs path only: doc indexing must not evict a live chat.
+        Episodic/chat summaries via summarize_service must NOT use this wait:
+        the worker path needs no wait (own slot) and the chat path does a
+        busy-check-and-skip instead, so summaries never stall FIFO behind chat.
+        """
         waited = 0
         while LlamaEngine.get_instance("chat").is_generating():
             if waited >= timeout_s:
@@ -205,9 +211,11 @@ class IngestJob:
         return True
 
     def _write_summary(self, db: Session, doc: DocumentsModel) -> None:
-        """One short SLM pass over the head of the doc; extractive fallback."""
-        from services.llm_service import LLMService
-        from services.prompt_manager import PromptManager
+        """One short SLM pass over the head of the doc; extractive fallback.
+
+        Uses summarize_text (own slot/timeout, no ingest idle wait here).
+        """
+        from services.summarize_service import summarize_text
 
         chunks = (
             db.query(DocumentChunksModel)
@@ -219,12 +227,7 @@ class IngestJob:
         summary = ""
         if head.strip():
             try:
-                text = LLMService().invoke(
-                    [{"role": "user",
-                      "content": PromptManager.render("doc_summary.j2", doc_text=head)}],
-                    max_tokens=128,
-                    temperature=0.2,
-                )
+                text = summarize_text(head, max_tokens=128)
                 summary = (text or "").strip().replace("\n", " ")[:SUMMARY_MAX_CHARS]
             except Exception as e:
                 logger.warning("summary SLM failed, extractive fallback: %s", e)

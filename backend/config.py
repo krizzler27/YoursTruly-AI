@@ -36,6 +36,7 @@ class Config(BaseSettings):
     LLAMA_MODEL_PATH: str = _default_models_dir()
     LLAMA_CHAT_MODEL: Optional[str] = None  # explicit chat GGUF, else finder picks most-recent
     LLAMA_EMBED_MODEL: Optional[str] = None  # explicit embed GGUF, else finder picks nomic
+    LLAMA_WORKER_MODEL: Optional[str] = None  # explicit worker GGUF, else finder picks small qwen
     LLAMA_N_CTX: Optional[int] = None  # auto: 4096 (<16GB) / 8192 (>=16GB)
     LLAMA_N_THREADS: Optional[int] = None  # auto: psutil physical cores
     LLAMA_N_GPU_LAYERS: Optional[int] = None  # auto: -1 Vulkan else 0

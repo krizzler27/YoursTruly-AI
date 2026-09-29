@@ -1,0 +1,140 @@
+"""Model-free worker slot tests: roles, resolve, busy skip, timeout, unload.
+
+Runs offline (no GGUF): fake engines stand in for llama.cpp weights.
+Never touches the real yourstrulyai.db (AGENTS testing rule).
+"""
+
+import sys
+import time
+from pathlib import Path
+from unittest import TestCase
+from unittest.mock import patch
+from unittest.mock import PropertyMock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from config import config as config_obj
+import services.llama_engine as engine_mod
+import services.summarize_service as summ_mod
+from services.llama_engine import (
+    EmbeddingEngine,
+    LlamaEngine,
+    WorkerEngine,
+    resolve_worker_model_path,
+)
+
+
+class FakeEngine:
+    """Stand-in slot: records load/unload, never touches weights."""
+
+    def __init__(self, generating=False):
+        self._generating = generating
+        self.loaded = False
+        self.unloads = 0
+
+    def is_generating(self):
+        return self._generating
+
+    def ensure_loaded(self):
+        self.loaded = True
+
+    def unload(self):
+        self.unloads += 1
+
+
+class RoleSlots(TestCase):
+    def test_singleton_per_role_and_lazy(self):
+        chat = LlamaEngine.get_instance("chat")
+        self.assertIs(chat, LlamaEngine.get_instance("chat"))
+        worker = LlamaEngine.get_instance("worker")
+        self.assertIsInstance(worker, WorkerEngine)
+        self.assertIs(worker, WorkerEngine.get_instance("worker"))
+        self.assertIsNot(chat, worker)
+        embed = EmbeddingEngine.get_instance("embed")
+        self.assertIsNot(embed, worker)
+        self.assertFalse(worker.is_loaded())  # slot created empty, never loads
+
+
+class ResolveWorker(TestCase):
+    def test_fallback_without_weights(self):
+        with patch.object(engine_mod, "list_models", return_value=[]), \
+            patch.object(config_obj, "LLAMA_WORKER_MODEL", None), \
+            patch.object(
+                type(config_obj), "EFFECTIVE_CHAT_MODEL",
+                new_callable=PropertyMock, return_value="/tmp/fake-chat.gguf",
+            ):
+            path, fallback = resolve_worker_model_path()
+        self.assertEqual(path, "/tmp/fake-chat.gguf")
+        self.assertTrue(fallback)
+
+    def test_qwen_pick_before_chat_fallback(self):
+        qwen = Path("/models/qwen2.5-1.5b-instruct-q4_k_m.gguf")
+        with patch.object(engine_mod, "list_models", return_value=[qwen]), \
+            patch.object(config_obj, "LLAMA_WORKER_MODEL", None):
+            path, fallback = resolve_worker_model_path()
+        self.assertEqual(path, str(qwen))
+        self.assertFalse(fallback)
+
+
+class SummarizeChatPath(TestCase):
+    def test_busy_check_skips_without_invoke(self):
+        llm_cls = patch.object(summ_mod, "LLMService")
+        eng_cls = patch.object(summ_mod, "LlamaEngine")
+        with llm_cls as mock_llm, eng_cls as mock_eng:
+            mock_eng.get_instance.return_value = FakeEngine(generating=True)
+            out = summ_mod.summarize_text("line one\nline two", max_tokens=10, role="chat")
+            mock_llm.assert_not_called()
+        self.assertEqual(out, "line one / line two")
+
+    def test_chat_success_keeps_resident_slot(self):
+        fake = FakeEngine(generating=False)
+        llm = patch.object(summ_mod, "LLMService")
+        eng = patch.object(summ_mod, "LlamaEngine")
+        with llm as mock_llm, eng as mock_eng:
+            mock_eng.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = "  hello summary  "
+            out = summ_mod.summarize_text("some long text here", max_tokens=32, role="chat")
+        self.assertEqual(out, "hello summary")
+        self.assertEqual(fake.unloads, 0)  # chat stays resident, never unloaded
+
+    def test_timeout_falls_back_to_extractive(self):
+        fake = FakeEngine(generating=False)
+
+        def slow(*args, **kwargs):
+            time.sleep(0.3)
+            return "too late"
+
+        llm = patch.object(summ_mod, "LLMService")
+        eng = patch.object(summ_mod, "LlamaEngine")
+        with llm as mock_llm, eng as mock_eng:
+            mock_eng.get_instance.return_value = fake
+            mock_llm.return_value.invoke.side_effect = slow
+            out = summ_mod.summarize_text(
+                "line one\nline two", max_tokens=10, timeout=0.05, role="chat"
+            )
+        self.assertEqual(out, "line one / line two")
+
+
+class SummarizeWorkerPath(TestCase):
+    def test_worker_unloads_after_success(self):
+        fake = FakeEngine(generating=False)
+        llm = patch.object(summ_mod, "LLMService")
+        worker = patch.object(summ_mod, "WorkerEngine")
+        with llm as mock_llm, worker as mock_worker:
+            mock_worker.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = "worker summary"
+            out = summ_mod.summarize_text("some text", max_tokens=32, role="worker")
+        self.assertEqual(out, "worker summary")
+        self.assertTrue(fake.loaded)
+        self.assertEqual(fake.unloads, 1)
+
+    def test_worker_failure_falls_back_to_extractive(self):
+        fake = FakeEngine(generating=False)
+        llm = patch.object(summ_mod, "LLMService")
+        worker = patch.object(summ_mod, "WorkerEngine")
+        with llm as mock_llm, worker as mock_worker:
+            mock_worker.get_instance.return_value = fake
+            mock_llm.return_value.invoke.side_effect = RuntimeError("boom")
+            out = summ_mod.summarize_text("line one\nline two", max_tokens=10, role="worker")
+        self.assertEqual(out, "line one / line two")
+        self.assertEqual(fake.unloads, 1)  # unload still runs after failure
