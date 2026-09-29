@@ -15,6 +15,7 @@ from config import config
 from core.context_budget import top_k_for_ctx
 from core.logging import get_logger
 from services.decider import Decider
+from repository.semantic_repository import SemanticMemoryRepository
 from services.llama_engine import EmbeddingEngine
 from services.llm_service import LLMService
 from services.rag_service import RagService
@@ -145,14 +146,34 @@ class RagGraph:
 
         return {"hits": hits, "decision": decision}
 
+    def _memory_text(self, query: str) -> Optional[str]:
+        """Relevant semantic facts as key: value lines, None when none."""
+        try:
+            rows = SemanticMemoryRepository(self.rag.db).find_relevant(query, limit=5)
+        except Exception as e:
+            logger.debug("memory recall skipped: %s", e)
+            return None
+        lines = [
+            f"{r.key}: {r.value}"
+            for r in rows or []
+            if (getattr(r, "value", "") or "").strip()
+        ]
+        text = "\n".join(lines).strip()
+        return text or None
+
     def _build(self, state: RagState) -> Dict[str, List[Dict[str, str]]]:
         query = state.get("query", "")
         history = state.get("history", [])
         decision = state.get("decision")
         hits = state.get("hits", [])
+        memory_text = self._memory_text(query)
 
         if decision is not None and decision.route == "RAG" and hits:
-            messages = self.rag.build_messages(query, hits, history)
+            messages = self.rag.build_messages(
+                query, hits, history, memory_text=memory_text
+            )
         else:
-            messages = self.llm.build_chat_messages(history, query)
+            messages = self.rag.build_messages(
+                query, None, history, memory_text=memory_text
+            )
         return {"messages": messages}

@@ -74,3 +74,16 @@ class DocumentChunksModel(Base):
     heading: Mapped[str] = mapped_column(default="")
     page: Mapped[int | None] = mapped_column(default=None)
     text: Mapped[str] = mapped_column()
+
+
+class SemanticMemoryModel(Base, TimestampMixin):
+    """Durable user facts - name, prefs, shared across chats."""
+
+    __tablename__ = "semantic_memory"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid6.uuid7
+    )
+    key: Mapped[str] = mapped_column(index=True, unique=True)
+    value: Mapped[str] = mapped_column(default="")

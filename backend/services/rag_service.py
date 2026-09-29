@@ -1,7 +1,7 @@
 """RAG read path + document lifecycle (ingest writes live in IngestService)."""
 
 import uuid
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from core.context_budget import (
     count_tokens,
     fit_history,
     fit_hits,
+    truncate_text,
     rag_context_tokens as _derived_rag_tokens,
 )
 from services.llm_service import LLMService
@@ -28,6 +29,14 @@ logger = get_logger(__name__)
 def rag_context_tokens(n_ctx: Optional[int] = None) -> int:
     """Retrieved-context budget derived from the chat window, never fixed."""
     return _derived_rag_tokens(n_ctx)
+
+
+def _fit_memory(mem: str, mem_cap: int) -> Tuple[str, int]:
+    """Truncate the memory block to mem_cap, report used tokens."""
+    if not mem or mem_cap <= 0:
+        return ("", 0)
+    cut = truncate_text(mem, mem_cap)
+    return (cut, count_tokens(cut))
 
 
 class RagService:
@@ -133,43 +142,55 @@ class RagService:
         hits: Optional[List[SearchHit]] = None,
         history: Optional[List[Dict[str, str]]] = None,
         max_context_tokens: Optional[int] = None,
+        memory_text: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """One builder: plain chat without hits, grounded prompt with hits."""
         clean = (query or "").strip()
+        mem = (memory_text or "").strip()
         if not hits:
             budget = allocate(
-                route="DIRECT", query_tokens=count_tokens(clean)
+                route="DIRECT",
+                needs_memory=bool(mem),
+                query_tokens=count_tokens(clean),
             )
             fitted_history, truncated, hist_used = fit_history(
                 history or [], budget["history_cap"]
             )
+            mem_block, mem_used = _fit_memory(mem, budget["mem_cap"])
             logger.info(
-                "budget total=%s usable=%s history=%s rag=%s mem=%s route=%s overflow=%s",
+                "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s route=%s overflow=%s",
                 budget["total"],
                 budget["usable"],
                 hist_used,
                 0,
                 budget["mem_cap"],
+                mem_used,
                 "DIRECT",
                 truncated,
             )
-            return LLMService.build_chat_messages(fitted_history, clean)
+            return LLMService.build_chat_messages(
+                fitted_history, clean, memory_text=mem_block or None
+            )
 
         logger.debug("build grounded hits=%s", len(hits))
-        budget = allocate(route="RAG", query_tokens=count_tokens(clean))
+        budget = allocate(
+            route="RAG", needs_memory=bool(mem), query_tokens=count_tokens(clean)
+        )
         rag_cap = max_context_tokens or budget["rag_cap"]
         fitted, hits_truncated, rag_used = fit_hits(hits, rag_cap)
         fitted_history, hist_truncated, hist_used = fit_history(
             history or [], budget["history_cap"]
         )
+        mem_block, mem_used = _fit_memory(mem, budget["mem_cap"])
         overflow = bool(hits_truncated or hist_truncated)
         logger.info(
-            "budget total=%s usable=%s history=%s rag=%s mem=%s route=%s overflow=%s",
+            "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s route=%s overflow=%s",
             budget["total"],
             budget["usable"],
             hist_used,
             rag_used,
             budget["mem_cap"],
+            mem_used,
             "RAG",
             overflow,
         )
@@ -204,6 +225,7 @@ class RagService:
             "rag_answer.j2",
             context_block=context_block,
             history_block=history_block,
+            memory_block=mem_block,
         )
 
         return [

@@ -41,6 +41,7 @@ class LLMService:
         history: Optional[List[Dict[str, str]]],
         current_query: str,
         cap_tokens: Optional[int] = None,
+        memory_text: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """Render chat prompt; token-fit history only when cap is set."""
         turns = list(history or [])
@@ -59,6 +60,7 @@ class LLMService:
         system_content = PromptManager.render(
             "chat_instruction.j2",
             history_block=history_block,
+            memory_block=(memory_text or "").strip(),
         )
         return [
             {"role": "system", "content": system_content},

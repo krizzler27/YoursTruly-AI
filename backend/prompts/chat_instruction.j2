@@ -20,3 +20,8 @@ Rules (apply them to the user message below):
 - Be friendly, clear, and concise. Use examples when useful.
 - If you do not know the answer, say so briefly and suggest where to find it.
 - Keep the response well-structured and easy to read.
+{% if memory_block %}
+
+Known facts about the user:
+{{ memory_block }}
+{% endif %}

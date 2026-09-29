@@ -11,6 +11,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from repository.document_repository import DocumentRepository
+from repository.semantic_repository import SemanticMemoryRepository, memory_tokens
 from core.logging import get_logger
 from schemas.rag_schemas import RouteDecision
 from services.llm_service import LLMService
@@ -61,11 +62,14 @@ class Decider:
         if _follows_up_files(clean, recent, attached):
             return RouteDecision(route="RAG", reason="follow-up on attached file")
 
-        mem_flag = needs_memory(clean, recent)
-        # TODO(P1-schema): thread mem_flag into allocate(needs_memory=...)
-        # in rag_service.build_messages and RagGraph.run; the
-        # semantic_memory table lookup replaces this keyword stub.
-        logger.debug("memory gate needs_memory=%s", mem_flag)
+        try:
+            mem_hits = SemanticMemoryRepository(self.db).find_relevant(clean, limit=5)
+        except Exception:
+            mem_hits = []
+        mem_flag = needs_memory(clean, recent, memories=mem_hits)
+        # mem_flag feeds allocate(needs_memory=...) in build_messages;
+        # RagGraph._build passes the same rows as memory_text.
+        logger.debug("memory gate needs_memory=%s mem_hits=%s", mem_flag, len(mem_hits))
 
         inventory = "\n".join(
             f"- {d.filename}" + (f": {d.summary}" if (d.summary or "").strip() else "")
@@ -92,7 +96,12 @@ class Decider:
                 structured_output=RouteDecision,
             )
             assert isinstance(result, RouteDecision)
-            logger.info("decide route=%s reason=%.100s", result.route, result.reason)
+            logger.info(
+                "decide route=%s reason=%.100s mem=%s",
+                result.route,
+                result.reason,
+                mem_flag,
+            )
             return result
         except RuntimeError as e:
             # Grammar-constrained SLMs often emit the right word in the
@@ -108,23 +117,46 @@ class Decider:
             return RouteDecision(route="DIRECT", reason="decider fallback")
 
 
-def needs_memory(query: str, history: Optional[List[Dict[str, str]]] = None) -> bool:
-    """Stub gate for semantic memory - keyword check until P1-schema lands."""
+_MEMORY_PATTERNS = [
+    r"\bcall me\b",
+    r"\bremember\b",
+    r"\bprefer\b",
+    r"\bmy name is\b",
+    r"\bname is\b",
+    r"\bmy name\b",
+]
+
+_HISTORY_PREF_PATTERNS = [
+    r"\bmy name is\b",
+    r"\bi (prefer|like|love|hate|dislike)\b",
+    r"\bmy (favorite|favourite)\b",
+    r"\bremember that\b",
+    r"\bcall me\b",
+]
+
+
+def needs_memory(
+    query: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    memories=None,
+) -> bool:
+    """Recall gate - keywords, history prefs, or semantic key overlap."""
     import re
 
-    parts = [(query or "")]
-    for t in list(history or [])[-2:]:
-        parts.append((t or {}).get("content") or "")
-    text = " ".join(parts).lower()
-    patterns = [
-        r"\bcall me\b",
-        r"\bremember\b",
-        r"\bprefer\b",
-        r"\bmy name is\b",
-        r"\bname is\b",
-        r"\bmy name\b",
-    ]
-    return any(re.search(p, text) for p in patterns)
+    recent = list(history or [])[-2:]
+    q = (query or "").lower()
+    hist = " ".join(((t or {}).get("content") or "") for t in recent).lower()
+    if any(re.search(p, f"{q} {hist}") for p in _MEMORY_PATTERNS):
+        return True
+    if hist and any(re.search(p, hist) for p in _HISTORY_PREF_PATTERNS):
+        return True
+    if memories:
+        toks = memory_tokens(query)
+        for m in memories:
+            key = m.get("key", "") if isinstance(m, dict) else (getattr(m, "key", "") or "")
+            if toks & memory_tokens(key):
+                return True
+    return False
 
 
 def _history_text(turns: Optional[List[Dict[str, str]]], cap_chars: int = 500) -> str:

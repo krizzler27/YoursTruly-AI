@@ -477,19 +477,18 @@ class QueueMechanics(DbCase):
         self.assertEqual((kept.status, kept.filename), ("indexed", "a.md"))
 
     def test_process_removes_temp_row_on_success(self):
-        import services.llm_service as llm_mod
+        import services.summarize_service as sum_mod
         import services.ingest_service as ingest_mod
 
         cid = self.conv()
-        fake_llm = MagicMock()
-        fake_llm.return_value.invoke.return_value = "a short summary"
         canon = Path(self.tmp.name) / "canon.md"
         with patch.object(ingest_job_mod._runner, "ensure_worker", lambda: None), \
              patch.object(ingest_job_mod, "EmbeddingEngine", FakeEngineFactory), \
              patch.object(ingest_job_mod, "SessionLocal", lambda: self.db), \
              patch.object(ingest_job_mod, "LanceRepository",
                           lambda db: self.lance()), \
-             patch.object(llm_mod, "LLMService", fake_llm), \
+             patch.object(sum_mod, "summarize_text",
+                          return_value="a short summary"), \
              patch.object(ingest_mod, "stored_upload_path",
                           lambda c, f: canon):
             src = self.write("t.md", "hello world " * 100)
@@ -509,6 +508,117 @@ class QueueMechanics(DbCase):
             ingest_job_mod.ingest_job.submit(self.db, self.write("q1.md"), "q1.md", cid)
             ingest_job_mod.ingest_job.submit(self.db, self.write("q2.md"), "q2.md", cid)
             self.assertEqual(ingest_job_mod._jobs.qsize(), 2)
+
+
+class SemanticMemory(DbCase):
+    def repo(self):
+        from repository.semantic_repository import SemanticMemoryRepository
+
+        return SemanticMemoryRepository(self.db)
+
+    def test_upsert_and_recall(self):
+        r = self.repo()
+        row = r.upsert("name", "Ada")
+        self.assertEqual(row.value, "Ada")
+        self.assertEqual(r.get_by_key("name").value, "Ada")
+        r.upsert("name", "Grace")
+        self.assertEqual(r.get_by_key("NAME").value, "Grace")
+        self.assertEqual(len(r.list_all(limit=100)), 1)
+
+    def test_find_relevant_key_overlap(self):
+        r = self.repo()
+        r.upsert("name", "Ada")
+        r.upsert("favorite food", "ramen")
+        hits = r.find_relevant("what is my name?", limit=5)
+        self.assertEqual([h.key for h in hits], ["name"])
+        self.assertEqual(r.find_relevant("how are you today?", limit=5), [])
+
+    def test_delete_by_key(self):
+        r = self.repo()
+        r.upsert("name", "Ada")
+        self.assertTrue(r.delete("name"))
+        self.assertIsNone(r.get_by_key("name"))
+        self.assertFalse(r.delete("name"))
+
+    def test_needs_memory_true_false(self):
+        from types import SimpleNamespace
+
+        from services.decider import needs_memory
+
+        self.assertFalse(needs_memory("how are you today"))
+        self.assertTrue(needs_memory("please remember my birthday"))
+        self.assertTrue(
+            needs_memory(
+                "anything else?",
+                history=[{"role": "user", "content": "i like strong coffee"}],
+            )
+        )
+        self.assertTrue(
+            needs_memory(
+                "what is my name?",
+                memories=[SimpleNamespace(key="name", value="Ada")],
+            )
+        )
+        self.assertTrue(
+            needs_memory(
+                "what is my name?", memories=[{"key": "name", "value": "Ada"}]
+            )
+        )
+        self.assertFalse(
+            needs_memory(
+                "how are you?", memories=[{"key": "name", "value": "Ada"}]
+            )
+        )
+
+    def test_build_messages_includes_memory_within_cap(self):
+        from core.context_budget import allocate, count_tokens, truncate_text
+
+        rag = RagService(
+            db=self.db, engine=MagicMock(), lance=MagicMock(), docs=MagicMock()
+        )
+        big = "name: " + "Ada " * 5000
+        msgs = rag.build_messages("what is my name?", None, [], memory_text=big)
+        system = msgs[0]["content"]
+        budget = allocate(
+            route="DIRECT",
+            needs_memory=True,
+            query_tokens=count_tokens("what is my name?"),
+        )
+        expect = truncate_text(big.strip(), budget["mem_cap"])
+        self.assertIn(expect, system)
+        self.assertLessEqual(count_tokens(expect), budget["mem_cap"])
+        self.assertNotIn(big.strip(), system)
+
+    def test_build_messages_rag_includes_memory(self):
+        rag = RagService(
+            db=self.db, engine=MagicMock(), lance=MagicMock(), docs=MagicMock()
+        )
+        uid = uuid.uuid4()
+        hits = [
+            SearchHit(id=f"{uid}:0", document_id=str(uid), heading="H",
+                      page=None, text="grounded fact", score=1.0),
+        ]
+        msgs = rag.build_messages(
+            "what is my name?", hits, [], memory_text="name: Ada"
+        )
+        self.assertIn("Ada", msgs[0]["content"])
+        self.assertIn("grounded fact", msgs[0]["content"])
+
+    def test_memory_error_fails_open(self):
+        from services.rag_graph import RagGraph
+
+        db = MagicMock()
+        rag = MagicMock()
+        rag.db = MagicMock()
+        rag.build_messages.return_value = [{"role": "user", "content": "hi"}]
+        decider = MagicMock()
+        decider.decide.return_value = RouteDecision(route="DIRECT", reason="t")
+        with patch("services.rag_graph.SemanticMemoryRepository") as repo:
+            repo.return_value.find_relevant.side_effect = RuntimeError("db down")
+            out = RagGraph(db=db, rag=rag, decider=decider, llm=MagicMock()).run("hi")
+        self.assertEqual(out["route"], "DIRECT")
+        _, kwargs = rag.build_messages.call_args
+        self.assertIsNone(kwargs.get("memory_text"))
 
 
 class AppContract(unittest.TestCase):
