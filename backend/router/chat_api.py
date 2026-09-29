@@ -12,6 +12,7 @@ from core.logging import get_logger, get_request_id, set_conversation_id
 from services.llama_engine import LlamaEngine
 from services.llm_service import LLMService
 from services.chat_services import ChatServices
+from services.rollup_job import rollup_job
 from schemas.api_schemas import ChatRequest, ConversationCreateRequest, ConversationResponse, MessageResponse, ConversationUpdateRequest
 
 logger = get_logger(__name__)
@@ -107,7 +108,7 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
                     yield f"data: {json.dumps({'warning': 'not saved'})}\n\n"
                 else:
                     try:
-                        chat_service.maybe_rollup(conversation.id)
+                        rollup_job.submit(db, conversation.id)
                     except Exception:
                         logger.debug("maybe_rollup failed, conversation=%s", conversation.id)
 

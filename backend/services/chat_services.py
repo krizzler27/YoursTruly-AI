@@ -78,7 +78,12 @@ class ChatServices:
             raise ValueError(f"Conversation {conversation_id} not found")
 
     def maybe_rollup(self, conversation_id: uuid.UUID) -> Optional[str]:
-        """Persist an episodic summary when triggered; fail-open, never raises."""
+        """Sync episodic write; fail-open, never raises.
+
+        Foreground-safe only on the cheap no-trigger path (history<=2 fast
+        return). A triggered turn runs a full SLM summarize inline, so the
+        request path prefers RollupJob.submit; kept for tests/back-compat.
+        """
         try:
             history = self.get_history(conversation_id, limit=100)
             if len(history) <= 2:
