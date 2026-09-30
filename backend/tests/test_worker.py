@@ -138,3 +138,80 @@ class SummarizeWorkerPath(TestCase):
             out = summ_mod.summarize_text("line one\nline two", max_tokens=10, role="worker")
         self.assertEqual(out, "line one / line two")
         self.assertEqual(fake.unloads, 1)  # unload still runs after failure
+
+
+class SummarizeAutoRoute(TestCase):
+    """resolve_slot auto-route: RAM x worker-file x explicit-role matrix."""
+
+    def test_auto_picks_worker_when_ram_and_file(self):
+        with patch.object(summ_mod, "total_ram_gb", return_value=16.0), \
+            patch.object(summ_mod, "resolve_worker_model_path",
+                         return_value=("/models/qwen2.5-1.5b.gguf", False)), \
+            patch.object(config_obj, "SUMMARY_MODEL_ROLE", "chat"):
+            self.assertEqual(summ_mod.resolve_slot(), "worker")
+            fake = FakeEngine(generating=False)
+            with patch.object(summ_mod, "WorkerEngine") as mock_worker, \
+                patch.object(summ_mod, "LLMService") as mock_llm:
+                mock_worker.get_instance.return_value = fake
+                mock_llm.return_value.invoke.return_value = "auto worker"
+                out = summ_mod.summarize_text("some text here", max_tokens=32)
+            self.assertEqual(out, "auto worker")
+            self.assertEqual(fake.unloads, 1)
+
+    def test_auto_falls_back_without_worker_file(self):
+        with patch.object(summ_mod, "total_ram_gb", return_value=16.0), \
+            patch.object(summ_mod, "resolve_worker_model_path",
+                         return_value=("/models/chat.gguf", True)), \
+            patch.object(config_obj, "SUMMARY_MODEL_ROLE", "chat"):
+            self.assertEqual(summ_mod.resolve_slot(), "chat")
+            fake = FakeEngine(generating=False)
+            with patch.object(summ_mod, "LlamaEngine") as mock_eng, \
+                patch.object(summ_mod, "LLMService") as mock_llm:
+                mock_eng.get_instance.return_value = fake
+                mock_llm.return_value.invoke.return_value = "chat summary"
+                out = summ_mod.summarize_text("some text here", max_tokens=32)
+            self.assertEqual(out, "chat summary")
+
+    def test_auto_falls_back_on_low_ram(self):
+        with patch.object(summ_mod, "total_ram_gb", return_value=8.0), \
+            patch.object(summ_mod, "resolve_worker_model_path",
+                         return_value=("/models/qwen2.5-1.5b.gguf", False)), \
+            patch.object(config_obj, "SUMMARY_MODEL_ROLE", "chat"):
+            self.assertEqual(summ_mod.resolve_slot(), "chat")
+
+    def test_explicit_chat_wins_on_16gb(self):
+        with patch.object(summ_mod, "total_ram_gb", return_value=32.0), \
+            patch.object(summ_mod, "resolve_worker_model_path",
+                         return_value=("/models/qwen2.5-1.5b.gguf", False)), \
+            patch.object(config_obj, "SUMMARY_MODEL_ROLE", "chat"):
+            self.assertEqual(summ_mod.resolve_slot("chat"), "chat")
+            fake = FakeEngine(generating=False)
+            with patch.object(summ_mod, "LlamaEngine") as mock_eng, \
+                patch.object(summ_mod, "LLMService") as mock_llm, \
+                patch.object(summ_mod, "WorkerEngine") as mock_worker:
+                mock_eng.get_instance.return_value = fake
+                mock_llm.return_value.invoke.return_value = "chat wins"
+                out = summ_mod.summarize_text("some text here", max_tokens=32, role="chat")
+            self.assertEqual(out, "chat wins")
+            mock_worker.get_instance.assert_not_called()
+
+    def test_explicit_worker_honored(self):
+        with patch.object(summ_mod, "total_ram_gb", return_value=8.0), \
+            patch.object(summ_mod, "resolve_worker_model_path",
+                         return_value=("/models/chat.gguf", True)), \
+            patch.object(config_obj, "SUMMARY_MODEL_ROLE", "chat"):
+            self.assertEqual(summ_mod.resolve_slot("worker"), "worker")
+            fake = FakeEngine(generating=False)
+            with patch.object(summ_mod, "WorkerEngine") as mock_worker, \
+                patch.object(summ_mod, "LLMService") as mock_llm:
+                mock_worker.get_instance.return_value = fake
+                mock_llm.return_value.invoke.return_value = "forced worker"
+                out = summ_mod.summarize_text("some text here", max_tokens=32, role="worker")
+            self.assertEqual(out, "forced worker")
+
+    def test_configured_non_default_respected(self):
+        with patch.object(summ_mod, "total_ram_gb", return_value=8.0), \
+            patch.object(summ_mod, "resolve_worker_model_path",
+                         return_value=("/models/chat.gguf", True)), \
+            patch.object(config_obj, "SUMMARY_MODEL_ROLE", "worker"):
+            self.assertEqual(summ_mod.resolve_slot(), "worker")

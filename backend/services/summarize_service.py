@@ -15,15 +15,17 @@ falls back to the extractive first-lines summary.
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from config import config
+from config import config, total_ram_gb
 from core.logging import get_logger
-from services.llama_engine import LlamaEngine, WorkerEngine
+from services.llama_engine import LlamaEngine, WorkerEngine, resolve_worker_model_path
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
 
 logger = get_logger(__name__)
 
 CHARS_PER_TOKEN = 4
+DEFAULT_SUMMARY_ROLE = "chat"
+MIN_WORKER_RAM_GB = 16.0
 
 # One shared pool for the foreground chat slot only: timeout enforcement
 # without building a throwaway executor per call. Worker-slot calls never
@@ -35,6 +37,40 @@ def extractive_fallback(text: str, max_chars: int) -> str:
     """First non-empty lines joined, truncated - no model needed."""
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
     return " / ".join(lines)[:max_chars].strip()
+
+
+def resolve_slot(explicit_role: Optional[str] = None) -> str:
+    """Pick the summary slot without loading weights.
+
+    Explicit role always wins. A non-default SUMMARY_MODEL_ROLE is
+    respected as-is. Otherwise auto-route: worker when RAM >= 16GB and
+    a real worker GGUF resolves, else chat.
+    """
+    if explicit_role:
+        logger.debug("summary slot explicit role=%s", explicit_role)
+        return explicit_role
+    configured = getattr(config, "SUMMARY_MODEL_ROLE", DEFAULT_SUMMARY_ROLE) or DEFAULT_SUMMARY_ROLE
+    if configured != DEFAULT_SUMMARY_ROLE:
+        logger.debug("summary slot configured role=%s", configured)
+        return configured
+    try:
+        ram_gb = total_ram_gb()
+    except Exception as e:
+        logger.debug("summary slot auto=chat ram probe failed err=%s", e)
+        return DEFAULT_SUMMARY_ROLE
+    if ram_gb < MIN_WORKER_RAM_GB:
+        logger.debug("summary slot auto=chat ram_gb=%.1f below %.1f", ram_gb, MIN_WORKER_RAM_GB)
+        return DEFAULT_SUMMARY_ROLE
+    try:
+        worker_path, is_fallback = resolve_worker_model_path()
+    except Exception as e:
+        logger.debug("summary slot auto=chat worker resolve failed err=%s", e)
+        return DEFAULT_SUMMARY_ROLE
+    if is_fallback:
+        logger.debug("summary slot auto=chat no worker GGUF ram_gb=%.1f", ram_gb)
+        return DEFAULT_SUMMARY_ROLE
+    logger.debug("summary slot auto=worker ram_gb=%.1f path=%s", ram_gb, worker_path)
+    return "worker"
 
 
 def _run_chat(text: str, max_tokens: int) -> str:
@@ -78,10 +114,12 @@ def summarize_text(
     skips while the engine is generating (summary_skipped_busy) and enforces
     timeout through the shared pool, logging summary_timeout on expiry.
     Blank input returns "" and any failure returns the first-lines fallback.
+    Without an explicit role, 16GB+ boxes with a real worker GGUF auto-route
+    to worker so background summaries skip the chat single-flight guard.
     """
     if not (text or "").strip():
         return ""
-    slot = role or config.SUMMARY_MODEL_ROLE
+    slot = resolve_slot(role)
     head = text.strip()
     fallback_chars = max_tokens * CHARS_PER_TOKEN
 
