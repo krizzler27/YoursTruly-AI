@@ -25,7 +25,6 @@ logger = get_logger(__name__)
 
 CHARS_PER_TOKEN = 4
 DEFAULT_SUMMARY_ROLE = "chat"
-MIN_WORKER_RAM_GB = 16.0
 
 # One shared pool for the foreground chat slot only: timeout enforcement
 # without building a throwaway executor per call. Worker-slot calls never
@@ -43,8 +42,8 @@ def resolve_slot(explicit_role: Optional[str] = None) -> str:
     """Pick the summary slot without loading weights.
 
     Explicit role always wins. A non-default SUMMARY_MODEL_ROLE is
-    respected as-is. Otherwise auto-route: worker when RAM >= 16GB and
-    a real worker GGUF resolves, else chat.
+    respected as-is. Otherwise auto-route: worker when RAM >=
+    MIN_WORKER_RAM_GB and a real worker GGUF resolves, else chat.
     """
     if explicit_role:
         logger.debug("summary slot explicit role=%s", explicit_role)
@@ -53,13 +52,14 @@ def resolve_slot(explicit_role: Optional[str] = None) -> str:
     if configured != DEFAULT_SUMMARY_ROLE:
         logger.debug("summary slot configured role=%s", configured)
         return configured
+    threshold_gb = config.MIN_WORKER_RAM_GB
     try:
         ram_gb = total_ram_gb()
     except Exception as e:
         logger.debug("summary slot auto=chat ram probe failed err=%s", e)
         return DEFAULT_SUMMARY_ROLE
-    if ram_gb < MIN_WORKER_RAM_GB:
-        logger.debug("summary slot auto=chat ram_gb=%.1f below %.1f", ram_gb, MIN_WORKER_RAM_GB)
+    if ram_gb < threshold_gb:
+        logger.debug("summary slot auto=chat ram_gb=%.1f below %.1f", ram_gb, threshold_gb)
         return DEFAULT_SUMMARY_ROLE
     try:
         worker_path, is_fallback = resolve_worker_model_path()
@@ -114,8 +114,9 @@ def summarize_text(
     skips while the engine is generating (summary_skipped_busy) and enforces
     timeout through the shared pool, logging summary_timeout on expiry.
     Blank input returns "" and any failure returns the first-lines fallback.
-    Without an explicit role, 16GB+ boxes with a real worker GGUF auto-route
-    to worker so background summaries skip the chat single-flight guard.
+    Without an explicit role, boxes at or above MIN_WORKER_RAM_GB with
+    a real worker GGUF auto-route to worker so background summaries
+    skip the chat single-flight guard.
     """
     if not (text or "").strip():
         return ""

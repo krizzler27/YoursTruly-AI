@@ -54,6 +54,7 @@ class Config(BaseSettings):
     SUMMARY_TRIGGER: float = 0.85  # usable fraction that triggers episodic write
     SUMMARY_TIMEOUT_S: int = 30  # summary call budget before truncate fallback
     SUMMARY_MODEL_ROLE: str = "chat"  # summary slot until worker lands
+    MIN_WORKER_RAM_GB: float = 14.0  # worker auto-route floor - true-16GB boxes report 14-15.9 after hardware reserve; 12GB-class stays out
 
     @property
     def IS_DEV(self) -> bool:
