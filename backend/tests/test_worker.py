@@ -158,6 +158,13 @@ class SummarizeAutoRoute(TestCase):
             self.assertEqual(out, "auto worker")
             self.assertEqual(fake.unloads, 1)
 
+    def test_auto_picks_worker_at_13_9(self):
+        with patch.object(summ_mod, "total_ram_gb", return_value=13.9), \
+            patch.object(summ_mod, "resolve_worker_model_path",
+                         return_value=("/models/qwen2.5-1.5b.gguf", False)), \
+            patch.object(config_obj, "SUMMARY_MODEL_ROLE", "chat"):
+            self.assertEqual(summ_mod.resolve_slot(), "worker")
+
     def test_auto_falls_back_without_worker_file(self):
         with patch.object(summ_mod, "total_ram_gb", return_value=14.0), \
             patch.object(summ_mod, "resolve_worker_model_path",
@@ -180,7 +187,7 @@ class SummarizeAutoRoute(TestCase):
             self.assertEqual(summ_mod.resolve_slot(), "chat")
 
     def test_auto_falls_back_below_threshold(self):
-        with patch.object(summ_mod, "total_ram_gb", return_value=13.9), \
+        with patch.object(summ_mod, "total_ram_gb", return_value=11.9), \
             patch.object(summ_mod, "resolve_worker_model_path",
                          return_value=("/models/qwen2.5-1.5b.gguf", False)), \
             patch.object(config_obj, "SUMMARY_MODEL_ROLE", "chat"):
