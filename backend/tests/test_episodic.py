@@ -94,6 +94,53 @@ class EpisodicRecall(EpisodicCase):
         ):
             self.assertEqual(svc.recall(self.conv(), "ramen", limit=3), [])
 
+    def test_recall_vector_rescues_paraphrase(self):
+        cid = self.conv()
+        coffee = EpisodicService(self.db).repo.create(
+            cid, "user prefers strong coffee", 0, 4
+        )
+        friday = EpisodicService(self.db).repo.create(
+            cid, "project deadline is friday", 4, 8
+        )
+        q = "morning brew habit"
+        plain = EpisodicService(self.db).recall(cid, q, limit=3)
+        self.assertTrue(plain[0].startswith("project deadline"))
+        out = EpisodicService(self.db).recall(
+            cid, q, limit=3,
+            query_vector=[1.0, 0.0],
+            candidate_vectors={str(coffee.id): [1.0, 0.0], str(friday.id): [0.0, 1.0]},
+        )
+        self.assertEqual(out, ["user prefers strong coffee"])
+
+    def test_recall_overlap_stays_first_with_vector(self):
+        cid = self.conv()
+        coffee = EpisodicService(self.db).repo.create(
+            cid, "user prefers strong coffee", 0, 4
+        )
+        friday = EpisodicService(self.db).repo.create(
+            cid, "project deadline is friday", 4, 8
+        )
+        out = EpisodicService(self.db).recall(
+            cid, "what coffee to brew?", limit=3,
+            query_vector=[0.0, 1.0],
+            candidate_vectors={str(coffee.id): [1.0, 0.0], str(friday.id): [0.0, 1.0]},
+        )
+        self.assertEqual(
+            out, ["user prefers strong coffee", "project deadline is friday"]
+        )
+
+    def test_recall_vector_below_threshold_returns_none(self):
+        cid = self.conv()
+        EpisodicService(self.db).repo.create(cid, "user prefers strong coffee", 0, 4)
+        EpisodicService(self.db).repo.create(cid, "project deadline is friday", 4, 8)
+        rows = EpisodicService(self.db).repo.list_recent_for_query(cid, limit=10)
+        cands = {str(r.id): [0.0, 1.0] for r in rows}
+        out = EpisodicService(self.db).recall(
+            cid, "morning brew habit", limit=3,
+            query_vector=[1.0, 0.0], candidate_vectors=cands,
+        )
+        self.assertEqual(out, [])
+
 
 class EpisodicRollup(EpisodicCase):
     def test_no_trigger_short_history(self):

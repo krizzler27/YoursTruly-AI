@@ -14,8 +14,8 @@ from schemas.rag_schemas import RouteDecision, SearchHit
 from config import config
 from core.context_budget import top_k_for_ctx
 from core.logging import get_logger
-from services.decider import Decider
-from repository.semantic_repository import SemanticMemoryRepository
+from services.decider import Decider, needs_memory
+from repository.semantic_repository import SemanticMemoryRepository, memory_embed_text
 from services.llama_engine import EmbeddingEngine
 from services.llm_service import LLMService
 from services.rag_service import RagService
@@ -163,29 +163,122 @@ class RagGraph:
     def _memory_text(
         self, query: str, conversation_id: Optional[uuid.UUID] = None
     ) -> Optional[str]:
-        """Semantic facts plus episodic summaries in one block, None when none."""
+        """Semantic facts plus episodic summaries in one block, None when none.
+
+        Cheap overlap pools first; the embed engine stays untouched on a
+        memory-less turn. Otherwise one batched embed (query plus capped
+        candidates) feeds vector-blended recall; any embed failure falls
+        back to overlap-only.
+        """
+        from services.episodic_service import EpisodicService
+
+        db = self.rag.db
         try:
-            rows = SemanticMemoryRepository(self.rag.db).find_relevant(query, limit=5)
+            sem_overlap = SemanticMemoryRepository(db).find_relevant(query, limit=5)
         except Exception as e:
             logger.debug("memory recall skipped: %s", e)
-            rows = []
+            sem_overlap = []
+        try:
+            sem_rows = list(SemanticMemoryRepository(db).list_all(limit=100) or [])
+        except Exception as e:
+            logger.debug("semantic pool skipped: %s", e)
+            sem_rows = []
+        try:
+            if conversation_id is not None:
+                epi_rows = list(
+                    EpisodicService(db).repo.list_recent_for_query(
+                        conversation_id, limit=10
+                    )
+                    or []
+                )
+            else:
+                epi_rows = []
+        except Exception as e:
+            logger.debug("episodic pool skipped: %s", e)
+            epi_rows = []
+        if (
+            not needs_memory(query, memories=sem_overlap)
+            and not epi_rows
+            and not sem_rows
+        ):
+            return None  # memory-less turn, engine untouched
+        sem_items = []
+        for row in sem_rows:
+            key = getattr(row, "key", "") or ""
+            text = memory_embed_text(f"{key}: {getattr(row, 'value', '') or ''}")
+            if text.strip():
+                sem_items.append((key, text))
+        epi_items = []
+        for row in epi_rows:
+            text = memory_embed_text(getattr(row, "summary", "") or "")
+            if text.strip():
+                epi_items.append((str(getattr(row, "id", "")), text))
+        vecs = None
+        try:
+            texts = (
+                [query or ""]
+                + [text for _, text in sem_items]
+                + [text for _, text in epi_items]
+            )
+            vecs = self.rag.engine.embed(texts)
+            if (
+                not isinstance(vecs, list)
+                or len(vecs) != len(texts)
+                or not all(isinstance(v, list) and v for v in vecs)
+            ):
+                raise ValueError("embed shape mismatch")
+        except Exception as e:
+            logger.debug("memory embed skipped, overlap-only: %s", e)
+            vecs = None
+        if vecs is None:
+            rows = sem_overlap
+            ep_texts: List[str] = []
+            if conversation_id is not None:
+                try:
+                    ep_texts = EpisodicService(db).recall(
+                        conversation_id, query, limit=3
+                    )
+                except Exception as e:
+                    logger.debug("episodic recall skipped, semantic-only: %s", e)
+                    ep_texts = []
+        else:
+            query_vector = vecs[0]
+            sem_vecs = {
+                key: vec for (key, _), vec in zip(sem_items, vecs[1:])
+            }
+            epi_vecs = {
+                key: vec
+                for (key, _), vec in zip(epi_items, vecs[1 + len(sem_items):])
+            }
+            try:
+                rows = SemanticMemoryRepository(db).find_relevant(
+                    query,
+                    limit=5,
+                    query_vector=query_vector,
+                    candidate_vectors=sem_vecs,
+                )
+            except Exception as e:
+                logger.debug("memory recall skipped: %s", e)
+                rows = sem_overlap
+            ep_texts = []
+            if conversation_id is not None:
+                try:
+                    ep_texts = EpisodicService(db).recall(
+                        conversation_id,
+                        query,
+                        limit=3,
+                        query_vector=query_vector,
+                        candidate_vectors=epi_vecs,
+                    )
+                except Exception as e:
+                    logger.debug("episodic recall skipped, semantic-only: %s", e)
+                    ep_texts = []
         lines = [
             f"{r.key}: {r.value}"
             for r in rows or []
             if (getattr(r, "value", "") or "").strip()
         ]
         sem_text = "\n".join(lines).strip()
-        ep_texts: List[str] = []
-        if conversation_id is not None:
-            try:
-                from services.episodic_service import EpisodicService
-
-                ep_texts = EpisodicService(self.rag.db).recall(
-                    conversation_id, query, limit=3
-                )
-            except Exception as e:
-                logger.debug("episodic recall skipped, semantic-only: %s", e)
-                ep_texts = []
         text = _combine_memory(sem_text, ep_texts)
         return text or None
 

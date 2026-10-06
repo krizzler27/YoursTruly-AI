@@ -14,7 +14,11 @@ from config import config
 from core.context_budget import count_tokens
 from core.logging import get_logger
 from repository.episodic_repository import EpisodicMemoryRepository
-from repository.semantic_repository import memory_tokens
+from repository.semantic_repository import (
+    MEMORY_VECTOR_MIN_SCORE,
+    cosine_sim,
+    memory_tokens,
+)
 import services.summarize_service as summarize_mod
 
 logger = get_logger(__name__)
@@ -88,9 +92,20 @@ class EpisodicService:
         return False
 
     def recall(
-        self, conversation_id: uuid.UUID, query: str, limit: int = 3
+        self,
+        conversation_id: uuid.UUID,
+        query: str,
+        limit: int = 3,
+        query_vector: Optional[List[float]] = None,
+        candidate_vectors: Optional[Dict[str, List[float]]] = None,
     ) -> List[str]:
-        """Top summaries by token overlap, recency breaking ties."""
+        """Top summaries by token overlap, vector-only hits filling the rest.
+
+        No vector keeps today's overlap-then-recency order. With a
+        query_vector plus candidate_vectors (row id string to vector over
+        the summary text), cosine rescues paraphrases into slots past the
+        overlap hits, recency breaking ties.
+        """
         try:
             rows = self.repo.list_recent_for_query(conversation_id, limit=10)
         except Exception as e:
@@ -103,6 +118,23 @@ class EpisodicService:
             if not text:
                 continue
             overlap = len(toks & memory_tokens(text)) if toks else 0
-            scored.append((overlap, -idx, text))
-        scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
-        return [text for _, _, text in scored[: max(0, limit)]]
+            scored.append((overlap, -idx, text, row))
+        if not (query_vector and candidate_vectors):
+            scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
+            return [text for _, _, text, _ in scored[: max(0, limit)]]
+        ranked = sorted(
+            [(ov, neg, text) for ov, neg, text, _ in scored if ov > 0],
+            key=lambda s: (s[0], s[1]),
+            reverse=True,
+        )
+        vector_only = []
+        for overlap, neg, text, row in scored:
+            if overlap > 0:
+                continue
+            vec = candidate_vectors.get(str(getattr(row, "id", "")))
+            sim = cosine_sim(query_vector, vec) if vec else 0.0
+            if sim >= MEMORY_VECTOR_MIN_SCORE:
+                vector_only.append((sim, neg, text))
+        vector_only.sort(key=lambda s: (s[0], s[1]), reverse=True)
+        ranked.extend(vector_only)
+        return [text for _, _, text in ranked[: max(0, limit)]]

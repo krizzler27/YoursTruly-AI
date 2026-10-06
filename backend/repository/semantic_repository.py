@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 import re
 import uuid
 
@@ -7,10 +7,35 @@ from sqlalchemy.orm import Session
 from db.models import SemanticMemoryModel
 from repository.base_repository import BaseRepository
 
+MEMORY_EMBED_CHARS = 200
+MEMORY_VECTOR_MIN_SCORE = 0.5
+
 
 def memory_tokens(text: str) -> set:
     """Lowercase alnum tokens len 3 plus, the key-overlap unit."""
     return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) >= 3}
+
+
+def memory_embed_text(text: str, max_chars: int = MEMORY_EMBED_CHARS) -> str:
+    """Recall-time candidate text clipped for one batched embed call."""
+    return ((text or "").strip())[:max_chars]
+
+
+def cosine_sim(a: Optional[List[float]], b: Optional[List[float]]) -> float:
+    """Cosine similarity, 0.0 on empty, ragged, or dim mismatch."""
+    if not isinstance(a, list) or not isinstance(b, list):
+        return 0.0
+    if not a or len(a) != len(b):
+        return 0.0
+    try:
+        dot = sum(x * y for x, y in zip(a, b))
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(y * y for y in b) ** 0.5
+    except (TypeError, ArithmeticError):
+        return 0.0
+    if not na or not nb:
+        return 0.0
+    return dot / (na * nb)
 
 
 class SemanticMemoryRepository(BaseRepository[SemanticMemoryModel]):
@@ -53,19 +78,41 @@ class SemanticMemoryRepository(BaseRepository[SemanticMemoryModel]):
             .all()
         )
 
-    def find_relevant(self, query: str, limit: int = 5) -> List[SemanticMemoryModel]:
-        """Top facts by key-token overlap with the query, best first."""
+    def find_relevant(
+        self,
+        query: str,
+        limit: int = 5,
+        query_vector: Optional[List[float]] = None,
+        candidate_vectors: Optional[Dict[str, List[float]]] = None,
+    ) -> List[SemanticMemoryModel]:
+        """Top facts by key-token overlap, vector-only hits filling the rest.
+
+        Overlap ranks first so exact matches stay put; with a query_vector
+        plus candidate_vectors (fact key to vector over "key: value" text),
+        cosine rescues paraphrases into remaining slots. No vector keeps
+        today's overlap-only behavior.
+        """
         toks = memory_tokens(query)
-        if not toks:
+        if not toks and not query_vector:
             return []
         scored = []
         for row in self.list_all(limit=100):
-            if len(toks & memory_tokens(row.key or "")):
-                scored.append(row)
-        scored.sort(
-            key=lambda r: len(toks & memory_tokens(r.key or "")), reverse=True
-        )
-        return scored[: max(0, limit)]
+            overlap = len(toks & memory_tokens(row.key or "")) if toks else 0
+            scored.append((overlap, row))
+        scored.sort(key=lambda p: p[0], reverse=True)
+        ranked = [row for overlap, row in scored if overlap > 0]
+        if query_vector and candidate_vectors:
+            vector_only = []
+            for overlap, row in scored:
+                if overlap > 0:
+                    continue
+                vec = candidate_vectors.get(row.key or "")
+                sim = cosine_sim(query_vector, vec) if vec else 0.0
+                if sim >= MEMORY_VECTOR_MIN_SCORE:
+                    vector_only.append((sim, row))
+            vector_only.sort(key=lambda p: p[0], reverse=True)
+            ranked.extend(row for _, row in vector_only)
+        return ranked[: max(0, limit)]
 
     def delete_by_key(self, key: str) -> bool:
         """Delete one fact by normalized key, False when absent."""

@@ -48,6 +48,30 @@ class FakeEngineFactory:
         return FakeEmbed()
 
 
+class FakeMemoryEmbed:
+    """Deterministic recall vectors: name/address/coffee share one axis."""
+
+    def __init__(self, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def embed(self, texts):
+        self.calls.append(list(texts))
+        if self.fail:
+            raise RuntimeError("embed down")
+        out = []
+        for t in texts:
+            low = (t or "").lower()
+            if "name" in low or "address" in low or "coffee" in low:
+                out.append([1.0, 0.0])
+            else:
+                out.append([0.0, 1.0])
+        return out
+
+    def unload(self):
+        pass
+
+
 class DbCase(unittest.TestCase):
     def setUp(self):
         self.eng = create_engine("sqlite:///:memory:")
@@ -617,6 +641,93 @@ class SemanticMemory(DbCase):
             repo.return_value.find_relevant.side_effect = RuntimeError("db down")
             out = RagGraph(db=db, rag=rag, decider=decider, llm=MagicMock()).run("hi")
         self.assertEqual(out["route"], "DIRECT")
+        _, kwargs = rag.build_messages.call_args
+        self.assertIsNone(kwargs.get("memory_text"))
+
+    def test_find_relevant_vector_rescues_paraphrase(self):
+        r = self.repo()
+        r.upsert("name", "Ada")
+        r.upsert("favorite food", "ramen")
+        q = "how should I address you"
+        self.assertEqual(r.find_relevant(q, limit=5), [])
+        hits = r.find_relevant(
+            q, limit=5,
+            query_vector=[1.0, 0.0],
+            candidate_vectors={"name": [1.0, 0.0], "favorite food": [0.0, 1.0]},
+        )
+        self.assertEqual([h.key for h in hits], ["name"])
+
+    def test_find_relevant_exact_match_stays_first(self):
+        r = self.repo()
+        r.upsert("name", "Ada")
+        r.upsert("favorite food", "ramen")
+        hits = r.find_relevant(
+            "what is my name?", limit=5,
+            query_vector=[0.0, 1.0],
+            candidate_vectors={"name": [1.0, 0.0], "favorite food": [0.0, 1.0]},
+        )
+        self.assertEqual([h.key for h in hits], ["name", "favorite food"])
+
+    def test_find_relevant_bad_vectors_stay_overlap_only(self):
+        r = self.repo()
+        r.upsert("name", "Ada")
+        r.upsert("favorite food", "ramen")
+        q = "what is my name?"
+        dim_mismatch = r.find_relevant(
+            q, limit=5,
+            query_vector=[1.0],
+            candidate_vectors={"name": [1.0, 0.0], "favorite food": [0.0, 1.0]},
+        )
+        self.assertEqual([h.key for h in dim_mismatch], ["name"])
+        no_candidates = r.find_relevant(q, limit=5, query_vector=[1.0, 0.0])
+        self.assertEqual([h.key for h in no_candidates], ["name"])
+
+    def memory_graph(self, engine):
+        from services.rag_graph import RagGraph
+
+        rag = MagicMock()
+        rag.db = self.db
+        rag.engine = engine
+        rag.build_messages.side_effect = lambda q, h, hist, **kw: [
+            {"role": "u", "content": kw.get("memory_text") or ""}
+        ]
+        decider = MagicMock()
+        decider.decide.return_value = RouteDecision(route="DIRECT", reason="t")
+        return RagGraph(db=self.db, rag=rag, decider=decider, llm=MagicMock()), rag
+
+    def test_memory_text_single_embed_covers_both_pools(self):
+        from repository.episodic_repository import EpisodicMemoryRepository
+
+        self.repo().upsert("name", "Ada")
+        self.repo().upsert("favorite food", "ramen")
+        cid = self.conv()
+        EpisodicMemoryRepository(self.db).create(
+            cid, "user prefers strong coffee", 0, 4
+        )
+        engine = FakeMemoryEmbed()
+        g, _ = self.memory_graph(engine)
+        text = g._memory_text("how should I address you", cid)
+        self.assertIn("name: Ada", text)
+        self.assertIn("earlier: user prefers strong coffee", text)
+        self.assertNotIn("ramen", text)
+        self.assertEqual(len(engine.calls), 1)  # query plus candidates, one call
+        self.assertEqual(len(engine.calls[0]), 4)
+
+    def test_memory_text_embed_failure_falls_back_overlap_only(self):
+        self.repo().upsert("name", "Ada")
+        engine = FakeMemoryEmbed(fail=True)
+        g, _ = self.memory_graph(engine)
+        self.assertIn("Ada", g._memory_text("what is my name?") or "")
+        self.assertIsNone(g._memory_text("how should I address you"))
+        self.assertEqual(len(engine.calls), 2)  # tried once per turn, then fallback
+
+    def test_memory_less_direct_turn_never_touches_engine(self):
+        engine = FakeMemoryEmbed()
+        g, rag = self.memory_graph(engine)
+        out = g.run("how are you today")
+        self.assertEqual(out["route"], "DIRECT")
+        rag.search.assert_not_called()
+        self.assertEqual(engine.calls, [])
         _, kwargs = rag.build_messages.call_args
         self.assertIsNone(kwargs.get("memory_text"))
 
