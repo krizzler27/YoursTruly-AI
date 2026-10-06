@@ -416,5 +416,198 @@ class RollupSseOrdering(EpisodicCase):
         self.assertEqual(chunks[-1], "data: [DONE]\n\n")
 
 
+class EpisodicCompaction(EpisodicCase):
+    def seed_rows(self, cid, n):
+        repo = EpisodicMemoryRepository(self.db)
+        for i in range(n):
+            repo.create(
+                cid,
+                f"summary number {i} with extra words to grow tokens",
+                i * 8,
+                (i + 1) * 8,
+            )
+        return repo.list_ordered_for_compaction(cid, limit=1000)
+
+    def test_merge_oldest_pair_contiguous_span(self):
+        import services.summarize_service as sum_mod
+
+        cid = self.conv()
+        self.seed_rows(cid, 21)
+        svc = EpisodicService(self.db)
+        with patch.object(sum_mod, "summarize_text", return_value="merged ab"):
+            stats = svc.compact_if_needed(cid)
+        self.assertEqual(stats["compacted"], 1)
+        self.assertEqual(stats["merged_turns"], "0-16")
+        rows = EpisodicMemoryRepository(self.db).list_ordered_for_compaction(
+            cid, limit=1000
+        )
+        self.assertEqual(len(rows), 20)
+        self.assertEqual((rows[0].turn_start, rows[0].turn_end), (0, 16))
+        self.assertEqual(rows[0].summary, "merged ab")
+        spans = [(r.turn_start, r.turn_end) for r in rows]
+        self.assertEqual(spans, sorted(spans))
+
+    def test_merge_abort_empty_keeps_originals(self):
+        import services.summarize_service as sum_mod
+
+        cid = self.conv()
+        rows = self.seed_rows(cid, 21)
+        # Make forget ineligible so the abort assertion isolates the merge.
+        for r in rows[:-10]:
+            r.recall_count = 1
+        self.db.commit()
+        oldest = [(r.turn_start, r.turn_end) for r in rows[:2]]
+        svc = EpisodicService(self.db)
+        with patch.object(sum_mod, "summarize_text", return_value=""):
+            stats = svc.compact_if_needed(cid)
+        self.assertEqual(stats["compacted"], 0)
+        self.assertEqual(stats["forgot"], 0)
+        kept = EpisodicMemoryRepository(self.db).list_ordered_for_compaction(
+            cid, limit=1000
+        )
+        self.assertEqual(len(kept), 21)
+        self.assertEqual([(r.turn_start, r.turn_end) for r in kept[:2]], oldest)
+
+    def test_merge_abort_grown_tokens_keeps_originals(self):
+        import services.summarize_service as sum_mod
+
+        cid = self.conv()
+        repo = EpisodicMemoryRepository(self.db)
+        repo.create(cid, "aa", 0, 8)
+        repo.create(cid, "bb", 8, 16)
+        for i in range(2, 21):
+            repo.create(cid, f"summary number {i} extra words here", i * 8, (i + 1) * 8)
+        for r in repo.list_ordered_for_compaction(cid, limit=1000)[:-10]:
+            r.recall_count = 1
+        self.db.commit()
+        svc = EpisodicService(self.db)
+        big = "word " * 500
+        with patch.object(sum_mod, "summarize_text", return_value=big):
+            stats = svc.compact_if_needed(cid)
+        self.assertEqual(stats["compacted"], 0)
+        self.assertEqual(stats["forgot"], 0)
+        rows = repo.list_ordered_for_compaction(cid, limit=1000)
+        self.assertEqual(len(rows), 21)
+
+    def test_newest_three_never_merged(self):
+        import services.summarize_service as sum_mod
+
+        cid = self.conv()
+        self.seed_rows(cid, 21)
+        before = {
+            r.summary
+            for r in EpisodicMemoryRepository(self.db).list_ordered_for_compaction(
+                cid, limit=1000
+            )[-3:]
+        }
+        with patch.object(sum_mod, "summarize_text", return_value="merged ab"):
+            EpisodicService(self.db).compact_if_needed(cid)
+        after = [
+            r.summary
+            for r in EpisodicMemoryRepository(self.db).list_ordered_for_compaction(
+                cid, limit=1000
+            )
+        ]
+        for s in before:
+            self.assertIn(s, after)
+
+    def test_forget_zero_hit_oldest_first(self):
+        import services.summarize_service as sum_mod
+
+        cid = self.conv()
+        rows = self.seed_rows(cid, 22)
+        # Mark the third-oldest as hit so forget must skip it.
+        hit = rows[2]
+        hit.recall_count = 1
+        self.db.commit()
+        victim_summary = rows[3].summary
+        hit_summary = hit.summary
+        with patch.object(sum_mod, "summarize_text", return_value="merged ab"):
+            stats = EpisodicService(self.db).compact_if_needed(cid)
+        self.assertEqual(stats["compacted"], 1)
+        self.assertEqual(stats["forgot"], 1)
+        remaining = [
+            r.summary
+            for r in EpisodicMemoryRepository(self.db).list_ordered_for_compaction(
+                cid, limit=1000
+            )
+        ]
+        self.assertIn(hit_summary, remaining)
+        self.assertNotIn(victim_summary, remaining)
+        self.assertEqual(len(remaining), 20)
+
+    def test_forget_never_touches_newest_ten(self):
+        import services.summarize_service as sum_mod
+
+        cid = self.conv()
+        rows = self.seed_rows(cid, 22)
+        # Every row outside the newest-10 is a hit, so nothing is forgettable.
+        for r in rows[:-10]:
+            r.recall_count = 1
+        self.db.commit()
+        newest_ten = {
+            r.summary for r in rows[-10:]
+        }
+        with patch.object(sum_mod, "summarize_text", return_value="merged ab"):
+            stats = EpisodicService(self.db).compact_if_needed(cid)
+        self.assertEqual(stats["forgot"], 0)
+        remaining = {
+            r.summary
+            for r in EpisodicMemoryRepository(self.db).list_ordered_for_compaction(
+                cid, limit=1000
+            )
+        }
+        # Newest rows survive (minus at most the merge pair, which is oldest).
+        for s in newest_ten:
+            self.assertIn(s, remaining)
+
+    def test_recall_increments_count_and_stamps_time(self):
+        cid = self.conv()
+        repo = EpisodicMemoryRepository(self.db)
+        repo.create(cid, "user likes ramen noodles", 0, 8)
+        svc = EpisodicService(self.db)
+        out = svc.recall(cid, "what ramen to cook?", limit=3)
+        self.assertTrue(out[0].startswith("user likes ramen"))
+        row = repo.list_by_conversation(cid)[0]
+        self.assertEqual(int(row.recall_count or 0), 1)
+        self.assertIsNotNone(row.last_recalled_at)
+        svc.recall(cid, "ramen again", limit=3)
+        row = repo.list_by_conversation(cid)[0]
+        self.assertEqual(int(row.recall_count or 0), 2)
+
+    def test_recall_vector_hit_increments(self):
+        cid = self.conv()
+        repo = EpisodicMemoryRepository(self.db)
+        coffee = repo.create(cid, "user prefers strong coffee", 0, 4)
+        repo.create(cid, "project deadline is friday", 4, 8)
+        svc = EpisodicService(self.db)
+        out = svc.recall(
+            cid,
+            "morning brew habit",
+            limit=3,
+            query_vector=[1.0, 0.0],
+            candidate_vectors={str(coffee.id): [1.0, 0.0]},
+        )
+        self.assertEqual(out, ["user prefers strong coffee"])
+        row = repo.get_by_id(coffee.id)
+        self.assertEqual(int(row.recall_count or 0), 1)
+        self.assertIsNotNone(row.last_recalled_at)
+
+    def test_recall_ordering_preserved_post_merge(self):
+        import services.summarize_service as sum_mod
+
+        cid = self.conv()
+        repo = EpisodicMemoryRepository(self.db)
+        # Oldest pair is filler so the merge never touches recall targets.
+        for i in range(19):
+            repo.create(cid, f"filler note number {i} extra words", i * 8, (i + 1) * 8)
+        repo.create(cid, "project deadline is friday", 19 * 8, 20 * 8)
+        repo.create(cid, "user likes ramen noodles", 20 * 8, 21 * 8)
+        with patch.object(sum_mod, "summarize_text", return_value="merged ab"):
+            EpisodicService(self.db).compact_if_needed(cid)
+        out = EpisodicService(self.db).recall(cid, "what ramen to cook?", limit=3)
+        self.assertTrue(out[0].startswith("user likes ramen"))
+
+
 if __name__ == "__main__":
     unittest.main()

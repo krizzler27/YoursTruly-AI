@@ -52,6 +52,16 @@ class RollupJob:
                 return
             usable = allocate(route="DIRECT", needs_memory=False, query_tokens=0)["usable"]
             EpisodicService(db).rollup_if_needed(conv_id, history, usable)
+            try:
+                stats = EpisodicService(db).compact_if_needed(conv_id)
+                logger.debug(
+                    "episodic compact done compacted=%s merged_turns=%s forgot=%s",
+                    stats.get("compacted"),
+                    stats.get("merged_turns"),
+                    stats.get("forgot"),
+                )
+            except Exception as e:
+                logger.debug("episodic compact skipped: %s", e)
         except Exception as e:
             logger.debug("episodic rollup skipped: %s", e)
         finally:

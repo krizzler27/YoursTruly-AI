@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 
 ROLLUP_EVERY_N_TURNS = 10
 ROLLUP_MAX_TOKENS = 128
+EPISODIC_ROW_CAP = 20
+EPISODIC_MERGE_PROTECT_NEWEST = 3
+EPISODIC_FORGET_PROTECT_NEWEST = 10
 
 
 class EpisodicService:
@@ -104,7 +107,8 @@ class EpisodicService:
         No vector keeps today's overlap-then-recency order. With a
         query_vector plus candidate_vectors (row id string to vector over
         the summary text), cosine rescues paraphrases into slots past the
-        overlap hits, recency breaking ties.
+        overlap hits, recency breaking ties. Returned overlap hits and
+        over-threshold vector hits bump recall_count in one commit.
         """
         try:
             rows = self.repo.list_recent_for_query(conversation_id, limit=10)
@@ -121,9 +125,11 @@ class EpisodicService:
             scored.append((overlap, -idx, text, row))
         if not (query_vector and candidate_vectors):
             scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
-            return [text for _, _, text, _ in scored[: max(0, limit)]]
+            top = scored[: max(0, limit)]
+            self._touch_hits([r for ov, _, _, r in top if ov > 0])
+            return [text for _, _, text, _ in top]
         ranked = sorted(
-            [(ov, neg, text) for ov, neg, text, _ in scored if ov > 0],
+            [(ov, neg, text, row) for ov, neg, text, row in scored if ov > 0],
             key=lambda s: (s[0], s[1]),
             reverse=True,
         )
@@ -134,7 +140,164 @@ class EpisodicService:
             vec = candidate_vectors.get(str(getattr(row, "id", "")))
             sim = cosine_sim(query_vector, vec) if vec else 0.0
             if sim >= MEMORY_VECTOR_MIN_SCORE:
-                vector_only.append((sim, neg, text))
+                vector_only.append((sim, neg, text, row))
         vector_only.sort(key=lambda s: (s[0], s[1]), reverse=True)
         ranked.extend(vector_only)
-        return [text for _, _, text in ranked[: max(0, limit)]]
+        top = ranked[: max(0, limit)]
+        self._touch_hits([r for _, _, _, r in top])
+        return [text for _, _, text, _ in top]
+
+    def _touch_hits(self, rows) -> None:
+        """Bump recall_count plus stamp on hit rows, fail-open."""
+        try:
+            ids = [getattr(r, "id", None) for r in (rows or [])]
+            ids = [i for i in ids if i is not None]
+            if ids:
+                self.repo.mark_recalled(ids)
+        except Exception as e:
+            logger.debug("episodic recall touch skipped: %s", e)
+
+    def compact_if_needed(self, conversation_id: uuid.UUID) -> Dict[str, object]:
+        """Merge one oldest pair plus forget zero-hit rows, fail-open.
+
+        Runs after rollup_if_needed in the rollup worker. When rows exceed
+        EPISODIC_ROW_CAP, merges exactly one oldest adjacent pair outside the
+        newest-3 recall backing, then forgets zero-hit rows oldest-first
+        outside the newest-10 recall pool. Merged rows carry min/max span and
+        copy the oldest parent created_at so created_at ordering stays
+        chronological. One pair per call keeps growth O(1) amortized.
+        """
+        result: Dict[str, object] = {"compacted": 0, "merged_turns": "", "forgot": 0}
+        try:
+            rows = self.repo.list_ordered_for_compaction(conversation_id, limit=1000)
+        except Exception as e:
+            logger.debug("episodic compact skipped: %s", e)
+            return result
+        if len(rows) <= EPISODIC_ROW_CAP:
+            return result
+        # Merge exactly one oldest adjacent pair, never touching newest-3.
+        merged_id = None
+        if len(rows) > EPISODIC_MERGE_PROTECT_NEWEST:
+            protect = EPISODIC_MERGE_PROTECT_NEWEST
+            if 1 < len(rows) - protect:
+                first, second = rows[0], rows[1]
+                merged_span, merged_id = self._merge_oldest_pair(
+                    conversation_id, first, second
+                )
+                if merged_span:
+                    result["compacted"] = 1
+                    result["merged_turns"] = merged_span
+                else:
+                    merged_id = None
+                try:
+                    rows = self.repo.list_ordered_for_compaction(
+                        conversation_id, limit=1000
+                    )
+                except Exception as e:
+                    logger.debug("episodic compact relist skipped: %s", e)
+        # Forget zero-hit rows oldest-first when still over cap.
+        try:
+            if len(rows) > EPISODIC_ROW_CAP:
+                forgot = self._forget_zero_hits(rows, exclude_ids={merged_id} if merged_id else None)
+                result["forgot"] = forgot
+        except Exception as e:
+            logger.debug("episodic forget skipped: %s", e)
+        logger.info(
+            "episodic compact conv=%s compacted=%s merged_turns=%s forgot=%s rows=%s",
+            conversation_id,
+            result["compacted"],
+            result["merged_turns"],
+            result["forgot"],
+            len(rows),
+        )
+        return result
+
+    def _merge_oldest_pair(self, conversation_id: uuid.UUID, first, second):
+        """Merge two adjacent rows via worker-slot summary, else empty span.
+
+        Returns (span, new_id): span is "" plus None on abort so the caller
+        keeps both parents. The new row id lets the same-pass forget step
+        spare the just-merged row instead of deleting it as oldest zero-hit.
+        """
+        combined = (
+            ((getattr(first, "summary", "") or "").strip()
+            + "\n"
+            + (getattr(second, "summary", "") or "").strip()).strip()
+        )
+        if not combined:
+            return "", None
+        try:
+            merged = summarize_mod.summarize_text(
+                combined, max_tokens=ROLLUP_MAX_TOKENS, role="worker"
+            )
+        except Exception as e:
+            logger.debug("episodic compact merge skipped: %s", e)
+            return "", None
+        if not (merged or "").strip():
+            return "", None
+        clean = merged.strip()
+        try:
+            parent_tokens = count_tokens(
+                getattr(first, "summary", "") or ""
+            ) + count_tokens(getattr(second, "summary", "") or "")
+            if count_tokens(clean) > parent_tokens:
+                logger.debug("episodic compact merge grew tokens, abort")
+                return "", None
+        except Exception as e:
+            logger.debug("episodic compact token check skipped: %s", e)
+            return "", None
+        start = min(int(first.turn_start), int(second.turn_start))
+        end = max(int(first.turn_end), int(second.turn_end))
+        try:
+            # Create merged row FIRST so a failure keeps both parents.
+            new_row = self.repo.create(conversation_id, clean, start, end)
+            try:
+                stamps = [
+                    c
+                    for c in (
+                        getattr(first, "created_at", None),
+                        getattr(second, "created_at", None),
+                    )
+                    if c is not None
+                ]
+                if stamps:
+                    new_row.created_at = min(stamps)
+                hits = [
+                    int(getattr(r, "recall_count", 0) or 0) for r in (first, second)
+                ]
+                new_row.recall_count = max(hits) if hits else 0
+                times = [
+                    getattr(r, "last_recalled_at", None) for r in (first, second)
+                ]
+                times = [t for t in times if t is not None]
+                if times:
+                    new_row.last_recalled_at = max(times)
+                self.db.commit()
+            except Exception as e:
+                logger.debug("episodic compact carry skipped: %s", e)
+            self.repo.delete_many([first.id, second.id])
+        except Exception as e:
+            logger.debug("episodic compact merge write skipped: %s", e)
+            return "", None
+        return f"{start}-{end}", new_row.id
+
+    def _forget_zero_hits(self, rows, exclude_ids=None) -> int:
+        """Delete zero-hit rows oldest-first outside newest-10 pool."""
+        need = len(rows) - EPISODIC_ROW_CAP
+        if need <= 0:
+            return 0
+        skipped = {str(i) for i in (exclude_ids or set()) if i is not None}
+        pool_end = max(0, len(rows) - EPISODIC_FORGET_PROTECT_NEWEST)
+        victims = [
+            r
+            for r in rows[:pool_end]
+            if int(getattr(r, "recall_count", 0) or 0) == 0
+            and str(getattr(r, "id", "")) not in skipped
+        ][:need]
+        if not victims:
+            return 0
+        try:
+            return int(self.repo.delete_many([r.id for r in victims]))
+        except Exception as e:
+            logger.debug("episodic forget delete skipped: %s", e)
+            return 0

@@ -104,6 +104,8 @@ class EpisodicMemoryModel(Base, TimestampMixin):
     summary: Mapped[str] = mapped_column(default="")
     turn_start: Mapped[int] = mapped_column(default=0)
     turn_end: Mapped[int] = mapped_column(default=0)
+    recall_count: Mapped[int] = mapped_column(default=0)
+    last_recalled_at: Mapped[Optional[datetime]] = mapped_column(nullable=True, default=None)
 
     __table_args__ = (
         Index("ix_episodic_memory_conversation_created", "conversation_id", "created_at"),
