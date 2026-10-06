@@ -38,3 +38,6 @@ notebooks/
 backend/rag_eval/
 
 */lancedb
+
+# Laya decision-model weights (local fine-tune output, never committed)
+backend/laya-model/

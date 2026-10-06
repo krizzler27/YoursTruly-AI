@@ -16,6 +16,7 @@ dependencies = [
     "langchain-text-splitters>=1.1.2",
     "langgraph>=1.2.11",
     "langsmith>=0.11.1",
+    "laya>=0.3.20",
     "llama-cpp-python>=0.3.35",
     "psutil",
     "pydantic>=2.13.4",
@@ -23,6 +24,8 @@ dependencies = [
     "pypdf>=6.18.0",
     "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.52",
+    "torch",
+    "transformers",
     "uuid6>=2025.0.1",
     "uvicorn[standard]>=0.52.4",
 ]
@@ -32,7 +35,13 @@ only-include = ["config.py", "main.py", "core", "router", "services", "db", "sch
 
 [tool.uv.sources]
 llama-cpp-python = { index = "llama-vulkan" }
+torch = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]
 name = "llama-vulkan"
 url = "https://abetlen.github.io/llama-cpp-python/whl/vulkan"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

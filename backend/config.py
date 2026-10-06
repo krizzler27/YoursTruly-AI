@@ -55,6 +55,9 @@ class Config(BaseSettings):
     SUMMARY_TIMEOUT_S: int = 30  # summary call budget before truncate fallback
     SUMMARY_MODEL_ROLE: str = "chat"  # summary slot until worker lands
     MIN_WORKER_RAM_GB: float = 12.0  # worker auto-route floor - true-16GB with up to ~4GB hardware reserve qualifies; 12GB-class and below stay out
+    LAYA_MODEL_DIR: str = "backend/laya-model"  # fine-tuned Laya weights, repo-root-relative unless absolute
+    LAYA_ROUTE_THRESHOLD: float = 0.8  # route confidence gate, smoke-test bar per docs/laya.md
+    LAYA_MEMORY_THRESHOLD: float = 0.8  # needs-memory confidence gate, same bar
 
     @property
     def IS_DEV(self) -> bool:

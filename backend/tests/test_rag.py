@@ -301,6 +301,25 @@ class Graph(unittest.TestCase):
         self.assertEqual(out["hits"], [])
 
 
+def _no_laya(test):
+    """Pin Laya unavailable so the test exercises the SLM/stub fail-open path.
+
+    The offline suite is model-free: with a backend/laya-model checkout
+    present, live Laya would answer first and the SLM contract under test
+    would never run.
+    """
+
+    def wrapper(self, *args, **kwargs):
+        with patch(
+            "services.decider.LayaService.get_instance",
+            side_effect=RuntimeError("laya down"),
+        ):
+            return test(self, *args, **kwargs)
+
+    wrapper.__name__ = test.__name__
+    return wrapper
+
+
 class DeciderRecovery(unittest.TestCase):
     def decider(self, llm):
         from services.decider import Decider
@@ -319,12 +338,14 @@ class DeciderRecovery(unittest.TestCase):
         self.assertEqual(_recover_route("parse failed; raw: go direct please"), "DIRECT")
         self.assertIsNone(_recover_route("parse failed; raw: ???"))
 
+    @_no_laya
     def test_parse_failure_recovers_rag(self):
         llm = MagicMock()
         llm.invoke.side_effect = RuntimeError("parse failed; raw: RAG")
         out = self.decider(llm).decide("q about docs?", uuid.uuid4())
         self.assertEqual((out.route, out.reason), ("RAG", "recovered"))
 
+    @_no_laya
     def test_parse_failure_without_route_falls_open(self):
         llm = MagicMock()
         llm.invoke.side_effect = RuntimeError("parse failed; raw: ???")
@@ -371,6 +392,7 @@ class DeciderHistory(unittest.TestCase):
         self.assertEqual(out.route, "RAG")
         llm.invoke.assert_not_called()
 
+    @_no_laya
     def test_chitchat_with_inventory_stays_direct(self):
         from services.decider import RouteDecision as RD
 
@@ -385,6 +407,7 @@ class DeciderHistory(unittest.TestCase):
         self.assertEqual(out.route, "DIRECT")
         llm.invoke.assert_called_once()
 
+    @_no_laya
     def test_needs_memory_stub_keywords(self):
         from services.decider import needs_memory
 
@@ -564,6 +587,7 @@ class SemanticMemory(DbCase):
         self.assertIsNone(r.get_by_key("name"))
         self.assertFalse(r.delete("name"))
 
+    @_no_laya
     def test_needs_memory_true_false(self):
         from types import SimpleNamespace
 
@@ -628,6 +652,7 @@ class SemanticMemory(DbCase):
         self.assertIn("Ada", msgs[0]["content"])
         self.assertIn("grounded fact", msgs[0]["content"])
 
+    @_no_laya
     def test_memory_error_fails_open(self):
         from services.rag_graph import RagGraph
 
@@ -695,6 +720,7 @@ class SemanticMemory(DbCase):
         decider.decide.return_value = RouteDecision(route="DIRECT", reason="t")
         return RagGraph(db=self.db, rag=rag, decider=decider, llm=MagicMock()), rag
 
+    @_no_laya
     def test_memory_text_single_embed_covers_both_pools(self):
         from repository.episodic_repository import EpisodicMemoryRepository
 
@@ -713,6 +739,7 @@ class SemanticMemory(DbCase):
         self.assertEqual(len(engine.calls), 1)  # query plus candidates, one call
         self.assertEqual(len(engine.calls[0]), 4)
 
+    @_no_laya
     def test_memory_text_embed_failure_falls_back_overlap_only(self):
         self.repo().upsert("name", "Ada")
         engine = FakeMemoryEmbed(fail=True)
@@ -721,6 +748,7 @@ class SemanticMemory(DbCase):
         self.assertIsNone(g._memory_text("how should I address you"))
         self.assertEqual(len(engine.calls), 2)  # tried once per turn, then fallback
 
+    @_no_laya
     def test_memory_less_direct_turn_never_touches_engine(self):
         engine = FakeMemoryEmbed()
         g, rag = self.memory_graph(engine)

@@ -10,10 +10,16 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from config import config
 from repository.document_repository import DocumentRepository
 from repository.semantic_repository import SemanticMemoryRepository, memory_tokens
 from core.logging import get_logger
 from schemas.rag_schemas import RouteDecision
+from services.laya_service import (
+    LayaService,
+    NEEDS_MEMORY_QUESTION,
+    ROUTE_QUESTION,
+)
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
 
@@ -66,7 +72,10 @@ class Decider:
             mem_hits = SemanticMemoryRepository(self.db).find_relevant(clean, limit=5)
         except Exception:
             mem_hits = []
-        mem_flag = needs_memory(clean, recent, memories=mem_hits)
+        laya_decision = self._laya_decide(clean, recent, attached, mem_hits)
+        if laya_decision is not None:
+            return laya_decision
+        mem_flag = _needs_memory_stub(clean, recent, memories=mem_hits)
         # mem_flag feeds allocate(needs_memory=...) in build_messages;
         # RagGraph._build passes the same rows as memory_text.
         logger.debug("memory gate needs_memory=%s mem_hits=%s", mem_flag, len(mem_hits))
@@ -116,6 +125,53 @@ class Decider:
             logger.warning("decider fallback: %s", e)
             return RouteDecision(route="DIRECT", reason="decider fallback")
 
+    def _laya_decide(
+        self,
+        clean: str,
+        recent: List[Dict[str, str]],
+        attached,
+        mem_hits,
+    ) -> Optional[RouteDecision]:
+        """One transient Laya call for route plus needs-memory.
+
+        Returns a decision on success, None on any failure so decide()
+        continues on today's SLM path exactly (fail-open).
+        """
+        try:
+            inventory = "\n".join(
+                f"- {d.filename}" + (f": {d.summary}" if (d.summary or "").strip() else "")
+                for d in attached
+            )
+            state = {
+                "query": clean,
+                "history": _history_text(recent),
+                "attached_docs": inventory,
+            }
+            res = LayaService.get_instance().predict(
+                state,
+                {"route": ROUTE_QUESTION, "needs_memory": NEEDS_MEMORY_QUESTION},
+            )
+            answers = (res or {}).get("answers") or {}
+            label, conf = _parse_choice(answers, "route")
+            p_mem = _parse_noul(answers, "needs_memory")
+            if p_mem >= config.LAYA_MEMORY_THRESHOLD:
+                mem_flag = True
+            else:
+                mem_flag = _needs_memory_stub(clean, recent, memories=mem_hits)
+            decision = _laya_route(
+                label, conf, bool(attached), config.LAYA_ROUTE_THRESHOLD
+            )
+            logger.info(
+                "laya decide route=%s conf=%.2f mem=%s",
+                decision.route,
+                conf,
+                mem_flag,
+            )
+            return decision
+        except Exception as e:
+            logger.debug("laya decide skipped, SLM path: %s", e)
+            return None
+
 
 _MEMORY_PATTERNS = [
     r"\bcall me\b",
@@ -135,7 +191,63 @@ _HISTORY_PREF_PATTERNS = [
 ]
 
 
+def _parse_choice(answers: Dict, qid: str):
+    """Choice label plus confidence, zeroed when the answer is malformed."""
+    ans = (answers or {}).get(qid) or {}
+    label = str(ans.get("choice", "") or "").upper()
+    try:
+        conf = float(ans.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+    return label, conf
+
+
+def _parse_noul(answers: Dict, qid: str) -> float:
+    """P(true) for a noul answer, 0.0 when malformed."""
+    ans = (answers or {}).get(qid) or {}
+    try:
+        return float(ans.get("noul", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _laya_route(
+    label: str, confidence: float, has_docs: bool, threshold: float
+) -> RouteDecision:
+    """Gate the Laya label on confidence, else safe-default by docs.
+
+    At or above threshold the Laya label wins (WEB has no serving branch
+    yet, so it falls through to the docs default). Below threshold docs
+    attached means RAG - empty retrieval fail-opens to DIRECT anyway -
+    while no docs means DIRECT.
+    """
+    if label in ("DIRECT", "RAG") and confidence >= threshold:
+        return RouteDecision(route=label, reason="laya")  # type: ignore[arg-type]
+    if has_docs:
+        return RouteDecision(route="RAG", reason="laya low-conf safe-default")
+    return RouteDecision(route="DIRECT", reason="laya low-conf no docs")
+
+
 def needs_memory(
+    query: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    memories=None,
+) -> bool:
+    """Recall gate - Laya first, keyword stub below threshold or on error."""
+    try:
+        state = {"query": query or "", "history": _history_text(history)}
+        res = LayaService.get_instance().predict(
+            state, {"needs_memory": NEEDS_MEMORY_QUESTION}
+        )
+        answers = (res or {}).get("answers") or {}
+        if _parse_noul(answers, "needs_memory") >= config.LAYA_MEMORY_THRESHOLD:
+            return True
+    except Exception as e:
+        logger.debug("laya memory gate skipped: %s", e)
+    return _needs_memory_stub(query, history, memories)
+
+
+def _needs_memory_stub(
     query: str,
     history: Optional[List[Dict[str, str]]] = None,
     memories=None,
