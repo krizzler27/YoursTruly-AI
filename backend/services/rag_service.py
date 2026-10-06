@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from config import config
 from db.models import DocumentsModel
 from core.logging import get_logger
 from core.trace import traceable
@@ -17,9 +18,11 @@ from core.context_budget import (
     count_tokens,
     fit_history,
     fit_hits,
+    top_k_for_ctx,
     truncate_text,
     rag_context_tokens as _derived_rag_tokens,
 )
+from services.laya_service import HIT_GRADE_QUESTION, LayaService
 from services.llm_service import LLMService
 from services.prompt_manager import PromptManager
 
@@ -37,6 +40,28 @@ def _fit_memory(mem: str, mem_cap: int) -> Tuple[str, int]:
         return ("", 0)
     cut = truncate_text(mem, mem_cap)
     return (cut, count_tokens(cut))
+
+
+def _parse_hit_level(answers: Dict) -> Tuple[int, float]:
+    """Argmax relevance level plus top-probability confidence.
+
+    Shape mirrors the smoke-test check in
+    backend/notebooks/laya_dataset/test_finetuned.py: answers holds
+    hit_grade probabilities keyed by level ("0"/"1"/"2"). Raises on any
+    malformed shape so the caller fails open to fused order.
+    """
+    ans = (answers or {}).get("hit_grade") or {}
+    probs = ans.get("probabilities")
+    if isinstance(probs, list):
+        pairs = list(enumerate(float(p) for p in probs))
+    elif isinstance(probs, dict):
+        pairs = [(int(k), float(v)) for k, v in probs.items()]
+    else:
+        raise ValueError(f"hit grade probs shape {type(probs).__name__}")
+    if {lv for lv, _ in pairs} != {0, 1, 2}:
+        raise ValueError(f"hit grade levels {[lv for lv, _ in pairs]}")
+    level, conf = max(pairs, key=lambda kv: kv[1])
+    return int(level), float(conf)
 
 
 class RagService:
@@ -82,8 +107,66 @@ class RagService:
         hits = self.lance.hybrid_search(
             clean, vectors[0], top_k=top_k, conversation_id=conversation_id, doc_ids=doc_ids
         )
-        logger.info("search done hits=%s", len(hits))
-        return hits
+        if not hits:
+            return hits
+        try:
+            return self._grade_hits(clean, hits)
+        except Exception as e:
+            logger.debug("hit grading skipped, fused order kept: %s", e)
+            return hits
+
+    def _grade_hits(self, query: str, hits: List[SearchHit]) -> List[SearchHit]:
+        """Reorder fused hits by Laya relevance, drop confident irrelevants.
+
+        exact(2) first, then partial(1), then irrelevant(0), stable by
+        fused score within a level. Level-0 drops only when a level>=1
+        exists, so grading alone never empties the list. Below
+        LAYA_HIT_THRESHOLD the head is advisory: fused order kept, grades
+        logged. Truncates to top_k_for_ctx. Raises on any Laya failure so
+        search() fails open to the fused list.
+        """
+        names = self._filenames(h.document_id for h in hits)
+        states = []
+        for h in hits:
+            filename = names.get(h.document_id, h.document_id)
+            states.append(
+                {
+                    "query": query,
+                    "chunk": f"[{filename}] {(h.text or '')}",
+                    "filename": filename,
+                }
+            )
+        svc = LayaService.get_instance()
+        questions = {"hit_grade": HIT_GRADE_QUESTION}
+        batch = getattr(svc, "predict_many", None)
+        if callable(batch):
+            results = batch(states, questions)
+        else:
+            results = [svc.predict(s, questions) for s in states]
+        if len(results) != len(hits):
+            raise ValueError(
+                f"hit grading count {len(results)} != hits {len(hits)}"
+            )
+        graded = []
+        for h, res in zip(hits, results):
+            answers = (res or {}).get("answers") or {}
+            level, conf = _parse_hit_level(answers)
+            graded.append((level, conf, h))
+        best = max((c for _, c, _ in graded), default=0.0)
+        if best < float(config.LAYA_HIT_THRESHOLD):
+            logger.info("hit grading advisory best_conf=%.2f hits=%s", best, len(hits))
+            return list(hits)
+        ordered = sorted(graded, key=lambda g: g[0], reverse=True)
+        if any(lv >= 1 for lv, _, _ in ordered):
+            ordered = [g for g in ordered if g[0] >= 1]
+        out = [h for _, _, h in ordered[: top_k_for_ctx()]]
+        logger.info(
+            "hit grading done hits=%s kept=%s best_conf=%.2f",
+            len(hits),
+            len(out),
+            best,
+        )
+        return out
 
     def list_documents(
         self, limit: int = 100, conversation_id: Optional[uuid.UUID] = None

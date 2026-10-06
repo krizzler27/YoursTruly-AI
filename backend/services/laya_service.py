@@ -122,3 +122,18 @@ class LayaService:
             return self._agent.predict(state, questions)
         finally:
             self.unload()
+
+    def predict_many(
+        self, states: list, questions: Dict[str, Dict[str, Any]]
+    ) -> list:
+        """Batched forward passes under one load, unload in finally.
+
+        Same 8GB contract as predict (never resident across requests):
+        one load serves the whole hit list instead of one load per hit.
+        """
+        self.load()
+        try:
+            agent = self._agent
+            return [agent.predict(s, questions) for s in states]
+        finally:
+            self.unload()

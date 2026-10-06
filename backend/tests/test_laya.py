@@ -14,8 +14,9 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from schemas.rag_schemas import RouteDecision
+from schemas.rag_schemas import RouteDecision, SearchHit
 from services import decider as dec_mod
+from services import rag_service as rag_mod
 from services.decider import Decider, _laya_route, needs_memory
 from services.laya_service import (
     HIT_GRADE_QUESTION,
@@ -193,6 +194,158 @@ class FrozenTemplates(unittest.TestCase):
             HIT_GRADE_QUESTION["instructions"], "How relevant is this chunk to the query?"
         )
         self.assertEqual(HIT_GRADE_QUESTION["criteria"], ["irrelevant", "partial", "exact"])
+
+
+def _grade_probs(level, conf=0.9):
+    """Hit-grade probabilities with argmax at level, top prob conf."""
+    rest = (1.0 - conf) / 2.0
+    probs = {"0": rest, "1": rest, "2": rest}
+    probs[str(level)] = conf
+    return probs
+
+
+class SeqAgent:
+    """Per-hit canned hit_grade answers in call order, or a predict error."""
+
+    def __init__(self, prob_list=None, error=None):
+        self.probs = list(prob_list or [])
+        self.error = error
+        self.calls = []
+
+    def predict(self, state, questions):
+        self.calls.append((state, questions))
+        if self.error is not None:
+            raise self.error
+        probs = self.probs[min(len(self.calls) - 1, len(self.probs) - 1)]
+        return {"answers": {"hit_grade": {"probabilities": probs}}}
+
+
+class LayaHitGrading(unittest.TestCase):
+    def tearDown(self):
+        LayaService.reset_instance()
+
+    def _hit(self, idx, score, text=None):
+        uid = uuid.uuid4()
+        return SearchHit(
+            id=f"{uid}:{idx}",
+            document_id=str(uid),
+            index=idx,
+            text=text or f"chunk-{idx} body",
+            score=score,
+        )
+
+    def search(self, hits, probs=None, error=None, threshold=0.8):
+        engine = MagicMock()
+        engine.embed.return_value = [[0.1] * 8]
+        lance = MagicMock()
+        fused = list(hits)
+        lance.hybrid_search.return_value = fused
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [
+            MagicMock(id=uuid.UUID(h.document_id), filename=f"{i}.md")
+            for i, h in enumerate(fused)
+        ]
+        rag = rag_mod.RagService(db=db, engine=engine, lance=lance, docs=MagicMock())
+        svc = LayaService(model_dir="fake-dir")
+        fake = SeqAgent(prob_list=probs, error=error)
+        svc._agent = fake
+        inst = patch.object(rag_mod.LayaService, "get_instance", return_value=svc)
+        inst.start()
+        self.addCleanup(inst.stop)
+        knob = patch.object(rag_mod.config, "LAYA_HIT_THRESHOLD", threshold)
+        knob.start()
+        self.addCleanup(knob.stop)
+        self._svc = svc
+        self._fake = fake
+        self._fused = fused
+        return rag
+
+    def test_hit_threshold_knob_defaults(self):
+        from config import Config
+
+        self.assertEqual(Config.model_fields["LAYA_HIT_THRESHOLD"].default, 0.8)
+
+    def test_exact_first_reorder_and_drop(self):
+        a = self._hit(0, 0.9, text="aaa timetable")
+        b = self._hit(1, 0.7, text="bbb timetable")
+        c = self._hit(2, 0.5, text="ccc timetable")
+        rag = self.search(
+            [a, b, c],
+            probs=[_grade_probs(1), _grade_probs(2), _grade_probs(0)],
+        )
+        with patch.object(self._svc, "load", wraps=self._svc.load) as load_spy:
+            out = rag.search("nightly backup timetable")
+        self.assertEqual([h.id for h in out], [b.id, a.id])
+        load_spy.assert_called_once()  # one load serves the whole list
+        self.assertFalse(self._svc.is_loaded())
+        self.assertEqual(len(self._fake.calls), 3)
+        state, questions = self._fake.calls[0]
+        self.assertEqual(
+            state,
+            {
+                "query": "nightly backup timetable",
+                "chunk": "[0.md] aaa timetable",
+                "filename": "0.md",
+            },
+        )
+        self.assertEqual(set(questions), {"hit_grade"})
+        self.assertIs(questions["hit_grade"], HIT_GRADE_QUESTION)
+
+    def test_all_irrelevant_keeps_order(self):
+        a = self._hit(0, 0.9)
+        b = self._hit(1, 0.5)
+        rag = self.search([a, b], probs=[_grade_probs(0), _grade_probs(0)])
+        out = rag.search("q")
+        self.assertEqual([h.id for h in out], [a.id, b.id])
+
+    def test_below_threshold_advisory_keeps_order(self):
+        a = self._hit(0, 0.9)
+        b = self._hit(1, 0.5)
+        rag = self.search(
+            [a, b],
+            probs=[{"0": 0.5, "1": 0.3, "2": 0.2}, {"0": 0.1, "1": 0.2, "2": 0.7}],
+            threshold=0.8,
+        )
+        out = rag.search("q")
+        self.assertEqual([h.id for h in out], [a.id, b.id])
+
+    def test_laya_error_returns_fused_untouched(self):
+        a = self._hit(0, 0.9)
+        b = self._hit(1, 0.5)
+        rag = self.search([a, b], error=RuntimeError("weights gone"))
+        out = rag.search("q")
+        self.assertIs(out, self._fused)
+
+    def test_empty_hits_skip_predict(self):
+        rag = self.search([], probs=[_grade_probs(2)])
+        out = rag.search("q")
+        self.assertEqual(out, [])
+        self.assertEqual(self._fake.calls, [])
+
+    def test_truncates_to_top_k(self):
+        hits = [self._hit(i, 0.9 - i * 0.1) for i in range(3)]
+        rag = self.search(hits, probs=[_grade_probs(2)] * 3)
+        with patch.object(rag_mod, "top_k_for_ctx", return_value=2):
+            out = rag.search("q")
+        self.assertEqual([h.id for h in out], [hits[0].id, hits[1].id])
+
+    def test_per_hit_fallback_without_predict_many(self):
+        a = self._hit(0, 0.9)
+        b = self._hit(1, 0.7)
+        c = self._hit(2, 0.5)
+        rag = self.search(
+            [a, b, c],
+            probs=[_grade_probs(1), _grade_probs(2), _grade_probs(0)],
+        )
+        self._svc.predict_many = None
+        # Preset fakes are single-use under the real unload (it dels
+        # _agent), so hold the fake resident to exercise the N-load loop.
+        with patch.object(self._svc, "load", wraps=self._svc.load) as load_spy, patch.object(
+            self._svc, "unload", lambda: None
+        ):
+            out = rag.search("q")
+        self.assertEqual([h.id for h in out], [b.id, a.id])
+        self.assertEqual(load_spy.call_count, 3)
 
 
 if __name__ == "__main__":

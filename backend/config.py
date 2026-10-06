@@ -58,6 +58,7 @@ class Config(BaseSettings):
     LAYA_MODEL_DIR: str = "backend/laya-model"  # fine-tuned Laya weights, repo-root-relative unless absolute
     LAYA_ROUTE_THRESHOLD: float = 0.8  # route confidence gate, smoke-test bar per docs/laya.md
     LAYA_MEMORY_THRESHOLD: float = 0.8  # needs-memory confidence gate, same bar
+    LAYA_HIT_THRESHOLD: float = 0.8  # hit-grade confidence gate, below keeps fused order (advisory)
 
     @property
     def IS_DEV(self) -> bool:
