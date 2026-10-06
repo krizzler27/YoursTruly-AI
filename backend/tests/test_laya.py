@@ -7,8 +7,11 @@ real backend/laya-model weights.
 """
 
 import sys
+import asyncio
+import json
 import unittest
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -346,6 +349,388 @@ class LayaHitGrading(unittest.TestCase):
             out = rag.search("q")
         self.assertEqual([h.id for h in out], [b.id, a.id])
         self.assertEqual(load_spy.call_count, 3)
+
+
+class RewriteGate(unittest.TestCase):
+    """L3 rewrite gate: Laya decides, SLM expands, retrieval uses final text.
+
+    Laya is faked (no weights) and the SLM rewrite is faked; the graph
+    runs with mocked rag/decider so only the gate wiring is exercised.
+    """
+
+    def tearDown(self):
+        LayaService.reset_instance()
+
+    def _run(self, query, history, noul=None, laya_error=None,
+             rewrite_return=None, rewrite_error=None):
+        from services import rag_graph as graph_mod
+        from services.rag_graph import RagGraph
+
+        seen = {}
+        rag = MagicMock()
+        rag.search.side_effect = lambda q, top_k=None, conversation_id=None: (
+            seen.setdefault("search_q", q), []
+        )[1]
+        rag.build_messages.side_effect = lambda q, hits, hist, **kw: (
+            seen.setdefault("build_q", q), [{"role": "user", "content": q}]
+        )[1]
+        rag.docs.list_by_conversation.return_value = [MagicMock(filename="n.md")]
+        rag.docs.list_recent.return_value = [MagicMock(filename="n.md")]
+        decider = MagicMock()
+        decider.decide.return_value = RouteDecision(route="RAG", reason="t")
+        g = RagGraph(db=MagicMock(), rag=rag, decider=decider,
+                     llm=MagicMock(), top_k=5)
+        svc = LayaService(model_dir="fake-dir")
+        answers = {"rewrite_needed": {"noul": noul}} if noul is not None else {}
+        svc._agent = FakeAgent(answers=answers, error=laya_error)
+        fake = svc._agent
+        with patch.object(graph_mod.LayaService, "get_instance", return_value=svc), \
+                patch.object(graph_mod, "_rewrite_via_slm") as rw, \
+                patch.object(RagGraph, "_memory_text", return_value=None), \
+                patch.object(RagGraph, "_topic_sibling_lines", return_value=[]):
+            if rewrite_error is not None:
+                rw.side_effect = rewrite_error
+            else:
+                rw.return_value = rewrite_return
+            out = g.run(query, history, uuid.uuid4())
+        return out, seen, fake, rw
+
+    def _history(self):
+        return [
+            {"role": "user", "content": "What chunk size do we use?"},
+            {"role": "assistant", "content": "800 tokens with 120 overlap."},
+        ]
+
+    def test_rewrite_threshold_knob_defaults(self):
+        from config import Config
+
+        self.assertEqual(Config.model_fields["LAYA_REWRITE_THRESHOLD"].default, 0.8)
+
+    def test_rewrite_question_frozen(self):
+        from services.rag_graph import REWRITE_QUESTION
+
+        self.assertEqual(REWRITE_QUESTION["type"], "noul")
+        self.assertEqual(
+            REWRITE_QUESTION["instructions"],
+            "Does this query need rewriting to be self-contained for retrieval?",
+        )
+
+    def test_gate_true_rewrites_search_keeps_build_original(self):
+        out, seen, fake, rw = self._run(
+            "and the overlap value?", self._history(), noul=0.9,
+            rewrite_return="What is the chunk overlap value?",
+        )
+        self.assertEqual(len(fake.calls), 1)
+        state, questions = fake.calls[0]
+        self.assertEqual(set(questions), {"rewrite_needed"})
+        self.assertEqual(state["query"], "and the overlap value?")
+        self.assertIn("chunk size", state["history"])
+        rw.assert_called_once()
+        self.assertEqual(seen["search_q"], "What is the chunk overlap value?")
+        self.assertEqual(seen["build_q"], "and the overlap value?")
+
+    def test_gate_false_sends_original_zero_rewrite_cost(self):
+        out, seen, fake, rw = self._run(
+            "and the overlap value?", self._history(), noul=0.1,
+            rewrite_return="SHOULD NOT BE USED",
+        )
+        rw.assert_not_called()
+        self.assertEqual(seen["search_q"], "and the overlap value?")
+        self.assertEqual(seen["build_q"], "and the overlap value?")
+
+    def test_rewrite_slm_failure_falls_back_to_original(self):
+        out, seen, fake, rw = self._run(
+            "and the overlap value?", self._history(), noul=0.9,
+            rewrite_error=RuntimeError("worker down"),
+        )
+        rw.assert_called_once()
+        self.assertEqual(seen["search_q"], "and the overlap value?")
+        self.assertEqual(seen["build_q"], "and the overlap value?")
+
+    def test_empty_history_skips_gate(self):
+        out, seen, fake, rw = self._run(
+            "and the overlap value?", [], noul=0.9,
+            rewrite_return="SHOULD NOT BE USED",
+        )
+        self.assertEqual(fake.calls, [])
+        rw.assert_not_called()
+        self.assertEqual(seen["search_q"], "and the overlap value?")
+
+    def test_laya_error_skips_rewrite(self):
+        out, seen, fake, rw = self._run(
+            "and the overlap value?", self._history(),
+            laya_error=RuntimeError("weights gone"),
+            rewrite_return="SHOULD NOT BE USED",
+        )
+        rw.assert_not_called()
+        self.assertEqual(seen["search_q"], "and the overlap value?")
+
+
+class GroundingGate(unittest.TestCase):
+    """L3 grounding gate: buffer RAG drafts, grade, stream or refuse."""
+
+    def tearDown(self):
+        LayaService.reset_instance()
+
+    def _hit(self, uid, text="Lease: 2 cats allowed with $200 deposit.", heading="pets"):
+        return SearchHit(
+            id=f"{uid}:0",
+            document_id=str(uid),
+            index=0,
+            heading=heading,
+            text=text,
+            score=0.9,
+        )
+
+    @staticmethod
+    async def _drain(it):
+        return [c if isinstance(c, str) else c.decode() for c in [c async for c in it]]
+
+    @staticmethod
+    def _events(chunks):
+        out = []
+        for part in "".join(chunks).split("\n\n"):
+            for line in part.splitlines():
+                if line.startswith("data: "):
+                    out.append(line[len("data: "):])
+        return out
+
+    def _grade(self, laya_answers=None, laya_error=None, query="q", context="c", draft="d"):
+        import services.grounding_service as ground_mod
+
+        svc = LayaService(model_dir="fake-dir")
+        fake = FakeAgent(answers=laya_answers, error=laya_error)
+        svc._agent = fake
+        with patch.object(ground_mod.LayaService, "get_instance", return_value=svc):
+            out = ground_mod.grade_draft(query, context, draft)
+        return out, fake
+
+    def _run_chat(self, *, route, hits, deltas, laya_answers=None,
+                  laya_error=None, filenames=None, watch_grade=False):
+        import router.chat_api as capi
+        import services.grounding_service as ground_mod
+        from schemas.api_schemas import ChatRequest
+
+        conv_id = uuid.uuid4()
+        consumed = []
+        saved = {}
+
+        async def fake_stream():
+            for d in deltas:
+                consumed.append(d)
+                yield d
+
+        conv = MagicMock()
+        conv.id = conv_id
+        chat_svc = MagicMock()
+        chat_svc.ensure_conversation.return_value = conv
+        chat_svc.get_history.return_value = []
+        chat_svc.run_agentic.return_value = {
+            "messages": [{"role": "user", "content": "q"}],
+            "route": route,
+            "hits": hits,
+        }
+
+        def _add(cid, role, content):
+            saved[role] = content
+            return MagicMock()
+
+        chat_svc.add_message.side_effect = _add
+        fake_llm = MagicMock()
+        fake_llm.astream_chat.side_effect = lambda **kw: fake_stream()
+        fake_engine = MagicMock()
+        fake_engine.is_generating.return_value = False
+
+        db = MagicMock()
+        rows = []
+        for uid, name in (filenames or {}).items():
+            row = MagicMock()
+            row.id = uid
+            row.filename = name
+            rows.append(row)
+        db.query.return_value.filter.return_value.all.return_value = rows
+
+        svc = LayaService(model_dir="fake-dir")
+        svc._agent = FakeAgent(answers=laya_answers, error=laya_error)
+
+        grade_spy = None
+        req = ChatRequest(query="What does the lease say about pets?", conversation_id=conv_id)
+
+        async def _main():
+            resp = await capi.chat(req, MagicMock(), db)
+            at_response = list(consumed)
+            chunks = await self._drain(resp.body_iterator)
+            return resp, at_response, chunks
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(capi, "ChatServices", return_value=chat_svc))
+            stack.enter_context(patch.object(capi, "LLMService", return_value=fake_llm))
+            stack.enter_context(
+                patch.object(capi.LlamaEngine, "get_instance", return_value=fake_engine)
+            )
+            stack.enter_context(patch.object(capi.rollup_job, "submit", return_value=None))
+            stack.enter_context(
+                patch.object(ground_mod.LayaService, "get_instance", return_value=svc)
+            )
+            if watch_grade:
+                grade_spy = MagicMock(wraps=ground_mod.grade_draft)
+                stack.enter_context(patch.object(ground_mod, "grade_draft", grade_spy))
+            resp, at_response, chunks = asyncio.run(_main())
+        return {
+            "response": resp,
+            "chunks": chunks,
+            "consumed": at_response,
+            "saved": saved,
+            "grade_spy": grade_spy,
+        }
+
+    def test_grounded_streams_buffered_in_order(self):
+        uid = uuid.uuid4()
+        out = self._run_chat(
+            route="RAG",
+            hits=[self._hit(uid)],
+            deltas=["2 cats ", "allowed."],
+            laya_answers={"is_grounded": {"noul": 0.95}},
+            filenames={uid: "lease.txt"},
+        )
+        self.assertEqual(out["consumed"], ["2 cats ", "allowed."])  # full draft before first byte
+        events = self._events(out["chunks"])
+        self.assertEqual(events[-1], "[DONE]")
+        self.assertEqual(
+            [json.loads(e)["content"] for e in events[:-1]], ["2 cats ", "allowed."]
+        )
+        self.assertEqual(out["saved"].get("assistant"), "2 cats allowed.")
+        self.assertEqual(out["response"].headers.get("x-route"), "RAG")
+        self.assertIn("x-ttft", {k.lower() for k in out["response"].headers.keys()})
+
+    def test_ungrounded_substitutes_refusal(self):
+        uid = uuid.uuid4()
+        out = self._run_chat(
+            route="RAG",
+            hits=[self._hit(uid)],
+            deltas=["3 dogs ", "allowed free."],
+            laya_answers={"is_grounded": {"noul": 0.1}},
+            filenames={uid: "lease.txt"},
+        )
+        events = self._events(out["chunks"])
+        self.assertEqual(events[-1], "[DONE]")
+        self.assertEqual(len(events), 2)
+        refusal = json.loads(events[0])["content"]
+        self.assertIn("lease.txt", refusal)
+        self.assertIn("rephrase", refusal)
+        self.assertNotIn("3 dogs", "".join(out["chunks"]))
+        self.assertEqual(out["saved"].get("assistant"), refusal)
+
+    def test_laya_error_streams_original(self):
+        uid = uuid.uuid4()
+        out = self._run_chat(
+            route="RAG",
+            hits=[self._hit(uid)],
+            deltas=["2 cats ", "allowed."],
+            laya_error=RuntimeError("weights gone"),
+            filenames={uid: "lease.txt"},
+        )
+        events = self._events(out["chunks"])
+        self.assertEqual(events[-1], "[DONE]")
+        self.assertEqual(
+            [json.loads(e)["content"] for e in events[:-1]], ["2 cats ", "allowed."]
+        )
+        self.assertEqual(out["saved"].get("assistant"), "2 cats allowed.")
+
+    def test_direct_never_buffers(self):
+        import services.grounding_service as ground_mod
+
+        uid = uuid.uuid4()
+        self.assertFalse(ground_mod.should_gate("DIRECT", [self._hit(uid)]))
+        out = self._run_chat(
+            route="DIRECT",
+            hits=[self._hit(uid)],
+            deltas=["hi ", "there ", "friend"],
+            laya_answers={"is_grounded": {"noul": 0.1}},
+            filenames={uid: "lease.txt"},
+            watch_grade=True,
+        )
+        out["grade_spy"].assert_not_called()  # no grade call on DIRECT
+        self.assertEqual(out["consumed"], ["hi "])  # first byte out before the rest exists
+        events = self._events(out["chunks"])
+        self.assertEqual(events[-1], "[DONE]")
+        self.assertEqual(
+            [json.loads(e)["content"] for e in events[:-1]], ["hi ", "there ", "friend"]
+        )
+        self.assertEqual(out["saved"].get("assistant"), "hi there friend")
+
+    def test_grade_true_false_none(self):
+        out, fake = self._grade({"is_grounded": {"noul": 0.95}})
+        self.assertTrue(out)
+        out, _ = self._grade({"is_grounded": {"noul": 0.1}})
+        self.assertFalse(out)
+        out, _ = self._grade(laya_error=RuntimeError("weights gone"))
+        self.assertIsNone(out)
+        out, _ = self._grade({"is_grounded": {"noul": 0.95}}, draft="  ")
+        self.assertIsNone(out)
+        out, _ = self._grade({})
+        self.assertIsNone(out)
+        out, _ = self._grade({"is_grounded": {"noul": 0.8}})
+        self.assertTrue(out)  # threshold is inclusive
+
+    def test_grade_single_call_shape(self):
+        import services.grounding_service as ground_mod
+
+        out, fake = self._grade({"is_grounded": {"noul": 0.95}})
+        self.assertTrue(out)
+        self.assertEqual(len(fake.calls), 1)
+        state, questions = fake.calls[0]
+        self.assertEqual(set(state), {"query", "context", "answer"})
+        self.assertEqual(set(questions), {"is_grounded"})
+        self.assertIs(questions["is_grounded"], ground_mod.IS_GROUNDED_QUESTION)
+
+    def test_ground_template_frozen(self):
+        import services.grounding_service as ground_mod
+
+        self.assertEqual(ground_mod.IS_GROUNDED_QUESTION["type"], "noul")
+        self.assertEqual(
+            ground_mod.IS_GROUNDED_QUESTION["instructions"],
+            "Is this answer fully supported by the provided context, with no outside facts?",
+        )
+
+    def test_ground_threshold_knob_defaults(self):
+        from config import Config
+
+        self.assertEqual(Config.model_fields["LAYA_GROUND_THRESHOLD"].default, 0.8)
+
+    def test_refusal_names_files(self):
+        import services.grounding_service as ground_mod
+
+        text = ground_mod.refusal_text(["b.md", "a.md"])
+        self.assertIn("a.md, b.md", text)
+        self.assertIn("rephrase", text)
+        bare = ground_mod.refusal_text([])
+        self.assertIn("cited files", bare)
+        self.assertIn("rephrase", bare)
+
+    def test_context_block_labels(self):
+        import services.grounding_service as ground_mod
+
+        uid = uuid.uuid4()
+        did = str(uid)
+        block = ground_mod.build_context_block(
+            [self._hit(uid, text="body", heading="pets")], {did: "lease.txt"}
+        )
+        self.assertIn("[lease.txt:pets]\nbody", block)
+        page_hit = SearchHit(id="x", document_id=did, text="p", page=3, score=0.1)
+        self.assertIn("[lease.txt:p3]", ground_mod.build_context_block([page_hit], {did: "lease.txt"}))
+        plain_hit = SearchHit(id="x", document_id=did, text="p", score=0.1)
+        self.assertIn("[lease.txt]\n", ground_mod.build_context_block([plain_hit], {did: "lease.txt"}))
+        self.assertIn(f"[{did}]", ground_mod.build_context_block([plain_hit]))
+
+    def test_should_gate(self):
+        import services.grounding_service as ground_mod
+
+        hit = self._hit(uuid.uuid4())
+        self.assertTrue(ground_mod.should_gate("RAG", [hit]))
+        self.assertFalse(ground_mod.should_gate("RAG", []))
+        self.assertFalse(ground_mod.should_gate("DIRECT", [hit]))
+        self.assertFalse(ground_mod.should_gate("DIRECT", []))
 
 
 if __name__ == "__main__":

@@ -59,6 +59,8 @@ class Config(BaseSettings):
     LAYA_ROUTE_THRESHOLD: float = 0.8  # route confidence gate, smoke-test bar per docs/laya.md
     LAYA_MEMORY_THRESHOLD: float = 0.8  # needs-memory confidence gate, same bar
     LAYA_HIT_THRESHOLD: float = 0.8  # hit-grade confidence gate, below keeps fused order (advisory)
+    LAYA_GROUND_THRESHOLD: float = 0.8  # is_grounded confidence gate, below substitutes the refusal
+    LAYA_REWRITE_THRESHOLD: float = 0.8  # rewrite-needed confidence gate, below keeps original query
 
     @property
     def IS_DEV(self) -> bool:

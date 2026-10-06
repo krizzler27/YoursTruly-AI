@@ -5,6 +5,7 @@ Flow: query + history + conversation_id -> decide (DIRECT skips retrieval)
 """
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -12,19 +13,150 @@ from sqlalchemy.orm import Session
 
 from schemas.rag_schemas import RouteDecision, SearchHit
 from config import config
-from core.context_budget import top_k_for_ctx
+from core.context_budget import count_tokens, top_k_for_ctx
 from core.logging import get_logger
 from services.decider import Decider, memory_evidence
 from repository.semantic_repository import SemanticMemoryRepository, memory_embed_text
-from services.llama_engine import EmbeddingEngine
+from services.laya_service import LayaService
+from services.llama_engine import EmbeddingEngine, LlamaEngine, WorkerEngine
 from services.llm_service import LLMService
+from services.prompt_manager import PromptManager
 from services.rag_service import RagService, _fit_memory
+from services.summarize_service import resolve_slot
 
 logger = get_logger(__name__)
 
 
 MEMORY_DOMINANT_SHARE = 0.7
 TOPIC_SIBLING_MAX_LINES = 3
+
+# Frozen rewrite-needed template, byte-identical to training rows and to
+# the smoke test in backend/notebooks/laya_dataset/test_finetuned.py.
+# Wording is model input: never reword without retraining (docs/laya.md 5.3).
+REWRITE_QUESTION = {
+    "type": "noul",
+    "instructions": "Does this query need rewriting to be self-contained for retrieval?",
+}
+
+REWRITE_MAX_TOKENS = 64
+
+# Own pool for the foreground chat slot only, mirroring summarize_text:
+# timeout enforcement without a throwaway executor per call. Worker-slot
+# calls never touch this pool; they block on their own owned slot.
+_REWRITE_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rewrite-chat")
+
+
+def _rewrite_history_text(
+    turns: Optional[List[Dict[str, str]]], cap_chars: int = 500
+) -> str:
+    """Last turns as User/Assistant lines, same shape as the decider gate."""
+    items = list(turns or [])[-2:]
+    if not items:
+        return "No prior conversation."
+    lines = []
+    for m in items:
+        role = "User" if (m or {}).get("role") == "user" else "Assistant"
+        lines.append(f"{role}: {(m or {}).get('content', '')}")
+    text = "\n".join(lines).strip()
+    if len(text) > cap_chars:
+        text = text[:cap_chars].rstrip()
+    return text or "No prior conversation."
+
+
+def _run_rewrite_chat(prompt_text: str, max_tokens: int) -> str:
+    """One SLM pass on the chat slot; Busy propagates to the caller."""
+    engine = LlamaEngine.get_instance("chat")
+    if engine.is_generating():
+        raise RuntimeError("System Busy - model is generating. Try again.")
+    engine.ensure_loaded()
+    svc = LLMService(engine=engine)
+    messages = [{"role": "user", "content": prompt_text}]
+    return (svc.invoke(messages, max_tokens=max_tokens, temperature=0.2) or "").strip()
+
+
+def _run_rewrite_worker(prompt_text: str, max_tokens: int) -> str:
+    """One SLM pass on the worker slot; load on demand, unload after."""
+    engine = WorkerEngine.get_instance("worker")
+    engine.ensure_loaded()
+    try:
+        svc = LLMService(engine=engine)
+        messages = [{"role": "user", "content": prompt_text}]
+        return (svc.invoke(messages, max_tokens=max_tokens, temperature=0.2) or "").strip()
+    finally:
+        engine.unload()
+
+
+def _rewrite_via_slm(
+    query: str,
+    history_text: str,
+    filenames_block: str,
+    timeout: Optional[float] = None,
+    role: Optional[str] = None,
+    max_tokens: int = REWRITE_MAX_TOKENS,
+) -> str:
+    """Expand a follow-up into a standalone query; never raises.
+
+    Mirrors summarize_text slot discipline: role=None auto-routes via
+    resolve_slot (worker preferred), the chat path busy-check-skips and
+    enforces timeout through the shared pool, and every failure returns
+    the original query. Call before any generation acquire, never nested.
+    """
+    clean = (query or "").strip()
+    if not clean:
+        return clean
+    slot = resolve_slot(role)
+    try:
+        prompt_text = PromptManager.render(
+            "rewrite_query.j2",
+            query=clean,
+            history_block=(history_text or "No prior conversation."),
+            filenames_block=(filenames_block or "No attached files."),
+        )
+    except Exception as e:
+        logger.warning("rewrite_skipped_prompt err=%s", e)
+        return clean
+
+    if slot == "worker":
+        try:
+            out = _run_rewrite_worker(prompt_text, max_tokens)
+        except RuntimeError as e:
+            if "Busy" in str(e):
+                logger.warning("rewrite_skipped_busy slot=%s err=%s", slot, e)
+            else:
+                logger.warning("rewrite_skipped_error slot=%s err=%s", slot, e)
+            return clean
+        except Exception as e:
+            logger.warning("rewrite_skipped_error slot=%s err=%s", slot, e)
+            return clean
+        if not (out or "").strip():
+            logger.warning("rewrite_skipped_empty slot=%s", slot)
+            return clean
+        return out.strip()
+
+    if LlamaEngine.get_instance("chat").is_generating():
+        logger.warning("rewrite_skipped_busy slot=chat")
+        return clean
+    budget_s = timeout if timeout is not None else config.SUMMARY_TIMEOUT_S
+    future = _REWRITE_POOL.submit(_run_rewrite_chat, prompt_text, max_tokens)
+    try:
+        out = future.result(timeout=budget_s)
+    except TimeoutError:
+        logger.warning("rewrite_timeout slot=%s budget_s=%s", slot, budget_s)
+        future.add_done_callback(lambda _f: _f.exception())
+        return clean
+    except RuntimeError as e:
+        if "Busy" in str(e):
+            logger.warning("rewrite_skipped_busy slot=%s err=%s", slot, e)
+        else:
+            logger.warning("rewrite_skipped_error slot=%s err=%s", slot, e)
+        return clean
+    except Exception as e:
+        logger.warning("rewrite_skipped_error slot=%s err=%s", slot, e)
+        return clean
+    if not (out or "").strip():
+        logger.warning("rewrite_skipped_empty slot=%s", slot)
+        return clean
+    return out.strip()
 
 
 def _memory_shares(
@@ -188,12 +320,117 @@ class RagGraph:
             return "rag"
         return "direct"
 
-    def _retrieve(self, state: RagState) -> Dict[str, Any]:
+    def _attached_filenames_block(
+        self, conversation_id: Optional[uuid.UUID] = None
+    ) -> str:
+        """Attached filenames for the rewrite prompt, fail-open to none."""
         try:
+            if conversation_id is not None:
+                rows = self.rag.docs.list_by_conversation(conversation_id, limit=8)
+            else:
+                rows = self.rag.docs.list_recent(limit=8)
+        except Exception as e:
+            logger.debug("rewrite filenames skipped: %s", e)
+            return "No attached files."
+        try:
+            names = [
+                (getattr(d, "filename", "") or "").strip() for d in rows or []
+            ]
+        except Exception as e:
+            logger.debug("rewrite filenames skipped: %s", e)
+            return "No attached files."
+        names = [n for n in names if n][:8]
+        if not names:
+            return "No attached files."
+        return "\n".join(f"- {n}" for n in names)
+
+    def _maybe_rewrite_query(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        conversation_id: Optional[uuid.UUID] = None,
+    ) -> str:
+        """Laya rewrite_needed gate; returns retrieval text, never raises.
+
+        Empty history skips the gate (no Laya, no SLM). Below threshold
+        returns the original with zero SLM cost. At or above threshold the
+        worker/chat SLM expands the follow-up; any failure returns the
+        original. Retrieval-internal only: the caller keeps the user turn.
+        """
+        clean = (query or "").strip()
+        if not clean:
+            return clean
+        recent = list(history or [])[-2:]
+        if not recent:
+            logger.debug("rewrite=false reason=empty-history")
+            return clean
+        history_text = _rewrite_history_text(recent)
+        try:
+            res = LayaService.get_instance().predict(
+                {"query": clean, "history": history_text},
+                {"rewrite_needed": REWRITE_QUESTION},
+            )
+            answers = (res or {}).get("answers") or {}
+            ans = answers.get("rewrite_needed") or {}
+            try:
+                p_true = float(ans.get("noul", 0.0))
+            except (TypeError, ValueError):
+                p_true = 0.0
+        except Exception as e:
+            logger.debug("rewrite_skipped_laya err=%s", e)
+            return clean
+        try:
+            threshold = float(config.LAYA_REWRITE_THRESHOLD)
+        except Exception:
+            threshold = 0.8
+        if p_true < threshold:
+            logger.debug(
+                "rewrite=false p_true=%.2f threshold=%.2f", p_true, threshold
+            )
+            return clean
+        try:
+            filenames_block = self._attached_filenames_block(conversation_id)
+        except Exception:
+            filenames_block = "No attached files."
+        try:
+            rewritten = _rewrite_via_slm(
+                clean, history_text, filenames_block, role=None
+            )
+        except Exception as e:
+            logger.debug("rewrite_skipped_slm err=%s", e)
+            return clean
+        final = (rewritten or "").strip() or clean
+        try:
+            orig_toks = count_tokens(clean)
+            new_toks = count_tokens(final)
+            logger.debug(
+                "rewrite=true p_true=%.2f orig_toks=%s new_toks=%s delta=%s",
+                p_true,
+                orig_toks,
+                new_toks,
+                new_toks - orig_toks,
+            )
+        except Exception:
+            logger.debug("rewrite=true p_true=%.2f", p_true)
+        return final
+
+    def _retrieve(self, state: RagState) -> Dict[str, Any]:
+        # Rewrite runs here before any generation acquire (same rule as
+        # summaries: never nested in acquire). Final text feeds search and
+        # grading; state query stays original for the user-facing build.
+        try:
+            raw = state.get("query", "")
+            history = state.get("history") or []
+            conversation_id = state.get("conversation_id")
+            try:
+                final = self._maybe_rewrite_query(raw, history, conversation_id)
+            except Exception as e:
+                logger.debug("rewrite_skipped err=%s", e)
+                final = (raw or "").strip()
             hits = self.rag.search(
-                state.get("query", ""),
+                final,
                 top_k=self.top_k,
-                conversation_id=state.get("conversation_id"),
+                conversation_id=conversation_id,
             )
         except Exception as e:
             logger.warning("Retrieval failed - falling back to DIRECT: %s", e)
