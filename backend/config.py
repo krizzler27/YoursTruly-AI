@@ -37,7 +37,7 @@ class Config(BaseSettings):
     LLAMA_CHAT_MODEL: Optional[str] = None  # explicit chat GGUF, else finder picks most-recent
     LLAMA_EMBED_MODEL: Optional[str] = None  # explicit embed GGUF, else finder picks nomic
     LLAMA_WORKER_MODEL: Optional[str] = None  # explicit worker GGUF, else finder picks small qwen
-    LLAMA_N_CTX: Optional[int] = None  # auto: 4096 (<16GB) / 8192 (>=16GB)
+    LLAMA_N_CTX: Optional[int] = None  # auto: 4096 (<12GB) / 8192 (>=12GB)
     LLAMA_N_THREADS: Optional[int] = None  # auto: psutil physical cores
     LLAMA_N_GPU_LAYERS: Optional[int] = None  # auto: -1 Vulkan else 0
     DATABASE_URL: str = "sqlite+pysqlite:///yourstrulyai.db"
@@ -69,10 +69,11 @@ class Config(BaseSettings):
 
     @property
     def EFFECTIVE_N_CTX(self) -> int:
-        """Resolved ctx: explicit override else RAM tier bins."""
+        """Resolved ctx: explicit override else RAM tier bins - 12GB-class and below stay 4096, 12GB and up get 8192."""
         if self.LLAMA_N_CTX is not None:
             return int(self.LLAMA_N_CTX)
-        return 8192 if total_ram_gb() >= 16.0 else 4096
+        # Same line as the worker threshold: true-16GB boxes with carve-out reporting 13+ usable qualify.
+        return 8192 if total_ram_gb() >= 12.0 else 4096
 
     @property
     def EFFECTIVE_N_THREADS(self) -> int:
