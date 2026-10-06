@@ -59,6 +59,16 @@ class ChatServices:
             raise ValueError(f"Conversation {conversation_id} not found")
         return conv
 
+    def set_topic(
+        self, conversation_id: uuid.UUID, topic: Optional[str]
+    ) -> ConversationsModel:
+        """Tag a conversation, None or blank clears the tag."""
+        conv = self.chat_repo.set_topic(conversation_id, topic)
+        if conv is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        logger.info("Conversation topic set - id=%s topic=%s", conv.id, conv.topic)
+        return conv
+
     def delete_conversation(self, conversation_id: uuid.UUID) -> None:
         """Delete conversation, its messages (cascade) and its attached docs."""
         rag = RagService(self.db)

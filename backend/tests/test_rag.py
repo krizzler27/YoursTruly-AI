@@ -878,6 +878,175 @@ class SemanticMemory(DbCase):
         self.assertLessEqual(count_tokens(text or ""), 60)
 
 
+class TopicBuffer(DbCase):
+    def chat_repo(self):
+        from repository.chat_repository import ChatRepository
+
+        return ChatRepository(self.db)
+
+    def epi_repo(self):
+        from repository.episodic_repository import EpisodicMemoryRepository
+
+        return EpisodicMemoryRepository(self.db)
+
+    def tag(self, cid, topic):
+        return self.chat_repo().set_topic(cid, topic)
+
+    def tgraph(self):
+        from services.rag_graph import RagGraph
+
+        rag = RagService(
+            db=self.db, engine=FakeEmbed(), lance=self.lance(), docs=MagicMock()
+        )
+        decider = MagicMock()
+        decider.decide.return_value = RouteDecision(route="DIRECT", reason="t")
+        return RagGraph(db=self.db, rag=rag, decider=decider, llm=MagicMock())
+
+    def test_set_clear_list(self):
+        repo = self.chat_repo()
+        c1, c2, c3 = self.conv(), self.conv(), self.conv()
+        self.tag(c1, "laya")
+        self.tag(c2, "laya")
+        self.tag(c3, "other")
+        self.assertEqual(repo.get_by_id(c1).topic, "laya")
+        self.assertEqual(repo.get_by_id(c3).topic, "other")
+        got = repo.list_by_topic("laya", limit=10, exclude_id=c1)
+        self.assertEqual([r.id for r in got], [c2])
+        self.assertEqual(repo.list_by_topic("  ", limit=10), [])
+        self.assertEqual(repo.list_by_topic("missing", limit=10), [])
+        self.tag(c1, None)
+        self.assertIsNone(repo.get_by_id(c1).topic)
+        self.tag(c2, "   ")
+        self.assertIsNone(repo.get_by_id(c2).topic)
+        self.assertIsNone(repo.set_topic(uuid.uuid4(), "laya"))
+
+    @_no_laya
+    def test_sibling_lines_appear_with_label(self):
+        c1, c2 = self.conv(), self.conv()
+        self.tag(c1, "laya")
+        self.tag(c2, "laya")
+        self.epi_repo().create(c2, "decided the launch date is friday", 0, 4)
+        g = self.tgraph()
+        lines = g._topic_sibling_lines(c1)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("Earlier in project laya:", lines[0])
+        self.assertIn("friday", lines[0])
+        out = g.run("what did we decide?", [], c1)
+        self.assertEqual(out["route"], "DIRECT")
+        system = out["messages"][0]["content"]
+        self.assertIn("Earlier in project laya:", system)
+        self.assertIn("friday", system)
+
+    @_no_laya
+    def test_cap_respected_siblings_yield_to_own_history(self):
+        from core.context_budget import allocate as real_allocate
+
+        c1, c2 = self.conv(), self.conv()
+        self.tag(c1, "laya")
+        self.tag(c2, "laya")
+        self.epi_repo().create(c2, "sibling decision about friday", 0, 4)
+        history = [
+            {"role": "user", "content": "alpha " * 40},
+            {"role": "assistant", "content": "beta " * 40},
+        ]
+        g = self.tgraph()
+        out = g.run("what did we decide?", history, c1)
+        self.assertIn("Earlier in project laya:", out["messages"][0]["content"])
+
+        def tiny_allocate(*a, **k):
+            budget = real_allocate(*a, **k)
+            budget["history_cap"] = 4
+            return budget
+
+        with patch("services.rag_service.allocate", side_effect=tiny_allocate):
+            starved = g.run("what did we decide?", history, c1)
+        system = starved["messages"][0]["content"]
+        self.assertNotIn("Earlier in project", system)
+        self.assertIn("beta", system)  # own last turn survives the squeeze
+
+    @_no_laya
+    def test_other_topic_excluded(self):
+        c1, c2 = self.conv(), self.conv()
+        self.tag(c1, "laya")
+        self.tag(c2, "other")
+        self.epi_repo().create(c2, "unrelated decision about monday", 0, 4)
+        g = self.tgraph()
+        self.assertEqual(g._topic_sibling_lines(c1), [])
+        out = g.run("what did we decide?", [], c1)
+        self.assertNotIn("Earlier in project", out["messages"][0]["content"])
+        self.assertNotIn("monday", out["messages"][0]["content"])
+
+    @_no_laya
+    def test_untagged_unchanged(self):
+        c1, c2 = self.conv(), self.conv()
+        self.tag(c2, "laya")
+        self.epi_repo().create(c2, "sibling decision about friday", 0, 4)
+        g = self.tgraph()
+        self.assertEqual(g._topic_sibling_lines(c1), [])
+        self.assertEqual(g._topic_sibling_lines(None), [])
+        out = g.run("hello there", [], c1)
+        self.assertNotIn("Earlier in project", out["messages"][0]["content"])
+        rag = g.rag
+        plain = rag.build_messages("hello there", None, [])
+        empty = rag.build_messages("hello there", None, [], topic_lines=[])
+        self.assertEqual(plain, empty)
+
+    @_no_laya
+    def test_max_three_lines(self):
+        c1 = self.conv()
+        self.tag(c1, "laya")
+        for i in range(5):
+            sib = self.conv()
+            self.tag(sib, "laya")
+            self.epi_repo().create(sib, f"sibling summary number {i}", 0, 4)
+        lines = self.tgraph()._topic_sibling_lines(c1)
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(all("Earlier in project laya:" in line for line in lines))
+
+    def test_api_patch_topic_round_trip(self):
+        from pydantic import ValidationError
+
+        from schemas.api_schemas import ConversationResponse, ConversationUpdateRequest
+        from services.chat_services import ChatServices
+
+        req = ConversationUpdateRequest.model_validate({"topic": "laya"})
+        self.assertEqual((req.title, req.topic), (None, "laya"))
+        self.assertIn("topic", req.model_fields_set)
+        blank = ConversationUpdateRequest.model_validate({"topic": "   "})
+        self.assertIsNone(blank.topic)
+        untouched = ConversationUpdateRequest.model_validate({"title": "Keep"})
+        self.assertNotIn("topic", untouched.model_fields_set)
+        with self.assertRaises(ValidationError):
+            ConversationUpdateRequest.model_validate({"topic": "x" * 65})
+
+        svc = ChatServices(self.db)
+        conv = svc.ensure_conversation(None, title="Original")
+        self.assertIsNone(conv.topic)
+        svc.set_topic(conv.id, "laya")
+        self.assertEqual(svc.chat_repo.get_by_id(conv.id).topic, "laya")
+        resp = ConversationResponse.model_validate(svc.chat_repo.get_by_id(conv.id))
+        self.assertEqual(resp.topic, "laya")
+        svc.set_topic(conv.id, "")
+        self.assertIsNone(svc.chat_repo.get_by_id(conv.id).topic)
+
+        from router.chat_api import update_conversation
+
+        tagged = update_conversation(
+            conv.id, ConversationUpdateRequest.model_validate({"topic": "laya"}), self.db
+        )
+        self.assertEqual(tagged.topic, "laya")
+        self.assertEqual(tagged.title, "Original")  # topic-only patch keeps title
+        renamed = update_conversation(
+            conv.id, ConversationUpdateRequest.model_validate({"title": "New name"}), self.db
+        )
+        self.assertEqual(renamed.title, "New name")
+        self.assertEqual(renamed.topic, "laya")  # title-only patch keeps topic
+        cleared = update_conversation(
+            conv.id, ConversationUpdateRequest.model_validate({"topic": None}), self.db
+        )
+        self.assertIsNone(cleared.topic)
+
+
 class AppContract(unittest.TestCase):
     def test_openapi_builds(self):
         from main import app

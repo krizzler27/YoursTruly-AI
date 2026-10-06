@@ -1,5 +1,5 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-from sqlalchemy import func, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import String, func, ForeignKey, Index, UniqueConstraint
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -26,6 +26,9 @@ class ConversationsModel(Base, TimestampMixin):
         default=uuid6.uuid7        
     )
     title: Mapped[str]
+    topic: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None, index=True
+    )
 
 class MessagesModel(Base, TimestampMixin):
 

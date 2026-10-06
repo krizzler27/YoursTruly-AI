@@ -166,10 +166,18 @@ def list_messages(conversation_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.patch('/conversations/{conversation_id}', response_model=ConversationResponse)
-def rename_conversation(conversation_id: uuid.UUID, req: ConversationUpdateRequest, db: Session = Depends(get_db)):
+def update_conversation(conversation_id: uuid.UUID, req: ConversationUpdateRequest, db: Session = Depends(get_db)):
     try:
-        llm = ChatServices(db)
-        conv = llm.rename_conversation(conversation_id, req.title)
+        svc = ChatServices(db)
+        conv = None
+        if req.title is not None:
+            conv = svc.rename_conversation(conversation_id, req.title)
+        if "topic" in req.model_fields_set:
+            conv = svc.set_topic(conversation_id, req.topic)
+        if conv is None:
+            conv = svc.chat_repo.get_by_id(conversation_id)
+            if conv is None:
+                raise ValueError(f"Conversation {conversation_id} not found")
         return conv
     except ValueError as e:
         return JSONResponse(status_code=404, content={"detail": str(e)})

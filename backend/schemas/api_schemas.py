@@ -27,6 +27,7 @@ class ChatRequest(BaseModel):
 class ConversationResponse(BaseModel):
     id: uuid.UUID
     title: str
+    topic: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -56,14 +57,25 @@ class ConversationCreateRequest(BaseModel):
 
 
 class ConversationUpdateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=250, description="New conversation title")
+    title: Optional[str] = Field(default=None, min_length=1, max_length=250, description="New conversation title")
+    topic: Optional[str] = Field(default=None, max_length=64, description="Project tag, null or blank clears")
 
     @field_validator("title")
     @classmethod
     def check_title(cls, v):
+        if v is None:
+            return None
         if not v or not v.strip():
             raise ValueError("Title cannot be empty")
         return v.strip()
+
+    @field_validator("topic", mode="before")
+    @classmethod
+    def check_topic(cls, v):
+        if v is None:
+            return None
+        v = str(v).strip()
+        return v or None
 
 
 class ModelDownloadRequest(BaseModel):

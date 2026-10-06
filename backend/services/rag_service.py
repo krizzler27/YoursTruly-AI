@@ -42,6 +42,28 @@ def _fit_memory(mem: str, mem_cap: int) -> Tuple[str, int]:
     return (cut, count_tokens(cut))
 
 
+def _fit_topic(
+    topic_lines: Optional[List[str]], remainder_tokens: int
+) -> Tuple[str, int]:
+    """Fit sibling-project lines into leftover history room.
+
+    Own history keeps strict priority (fitted first); siblings take only
+    the history_cap remainder. Simple remainder fit, not the dominant
+    split in _memory_shares, because the order is fixed priority rather
+    than evidence-weighted sharing.
+    """
+    lines = [
+        (s or "").strip() for s in topic_lines or []
+    ]
+    lines = [s for s in lines if s][:3]
+    if not lines or remainder_tokens <= 0:
+        return ("", 0)
+    joined = "\n".join(lines)
+    cut = truncate_text(joined, remainder_tokens)
+    clean = cut.strip()
+    return (clean, count_tokens(clean)) if clean else ("", 0)
+
+
 def _parse_hit_level(answers: Dict) -> Tuple[int, float]:
     """Argmax relevance level plus top-probability confidence.
 
@@ -226,8 +248,14 @@ class RagService:
         history: Optional[List[Dict[str, str]]] = None,
         max_context_tokens: Optional[int] = None,
         memory_text: Optional[str] = None,
+        topic_lines: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
-        """One builder: plain chat without hits, grounded prompt with hits."""
+        """One builder: plain chat without hits, grounded prompt with hits.
+
+        topic_lines holds sibling-project episodic lines (already labeled
+        by the graph); they fill only leftover history room after own
+        history is fitted, never the memory carve.
+        """
         clean = (query or "").strip()
         mem = (memory_text or "").strip()
         if not hits:
@@ -240,19 +268,24 @@ class RagService:
                 history or [], budget["history_cap"]
             )
             mem_block, mem_used = _fit_memory(mem, budget["mem_cap"])
+            topic_block, topic_used = _fit_topic(
+                topic_lines, max(0, budget["history_cap"] - hist_used)
+            )
             logger.info(
-                "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s route=%s overflow=%s",
+                "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s topic_used=%s route=%s overflow=%s",
                 budget["total"],
                 budget["usable"],
                 hist_used,
                 0,
                 budget["mem_cap"],
                 mem_used,
+                topic_used,
                 "DIRECT",
                 truncated,
             )
             return LLMService.build_chat_messages(
-                fitted_history, clean, memory_text=mem_block or None
+                fitted_history, clean, memory_text=mem_block or None,
+                topic_text=topic_block or None,
             )
 
         logger.debug("build grounded hits=%s", len(hits))
@@ -265,15 +298,19 @@ class RagService:
             history or [], budget["history_cap"]
         )
         mem_block, mem_used = _fit_memory(mem, budget["mem_cap"])
+        topic_block, topic_used = _fit_topic(
+            topic_lines, max(0, budget["history_cap"] - hist_used)
+        )
         overflow = bool(hits_truncated or hist_truncated)
         logger.info(
-            "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s route=%s overflow=%s",
+            "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s topic_used=%s route=%s overflow=%s",
             budget["total"],
             budget["usable"],
             hist_used,
             rag_used,
             budget["mem_cap"],
             mem_used,
+            topic_used,
             "RAG",
             overflow,
         )
@@ -303,6 +340,11 @@ class RagService:
                 f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')}"
                 for m in fitted_history
             )
+        if topic_block:
+            if history_block == "No prior conversation.":
+                history_block = topic_block
+            else:
+                history_block = f"{history_block}\n{topic_block}"
 
         system_content = PromptManager.render(
             "rag_answer.j2",
