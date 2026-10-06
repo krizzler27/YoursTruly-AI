@@ -5,7 +5,7 @@ Flow: query + history + conversation_id -> decide (DIRECT skips retrieval)
 """
 
 import uuid
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
@@ -14,26 +14,76 @@ from schemas.rag_schemas import RouteDecision, SearchHit
 from config import config
 from core.context_budget import top_k_for_ctx
 from core.logging import get_logger
-from services.decider import Decider, needs_memory
+from services.decider import Decider, memory_evidence
 from repository.semantic_repository import SemanticMemoryRepository, memory_embed_text
 from services.llama_engine import EmbeddingEngine
 from services.llm_service import LLMService
-from services.rag_service import RagService
+from services.rag_service import RagService, _fit_memory
 
 logger = get_logger(__name__)
 
 
-def _combine_memory(sem_text: str, ep_texts: Optional[List[str]]) -> str:
-    """One memory block inside mem_cap, semantic first, episodic remainder."""
-    from core.context_budget import count_tokens, truncate_text
+MEMORY_DOMINANT_SHARE = 0.7
 
-    cap = config.EFFECTIVE_MEMORY_TOKENS
-    sem_block = truncate_text((sem_text or "").strip(), cap) if (sem_text or "").strip() else ""
-    used = count_tokens(sem_block) if sem_block else 0
-    rest = max(0, cap - used)
-    ep_lines = [f"earlier: {(s or '').strip()}" for s in ep_texts or [] if (s or "").strip()]
+
+def _memory_shares(
+    sem_hit: bool, epi_hit: bool, cap: int
+) -> Tuple[int, int, bool]:
+    """(sem_cap, epi_cap, epi_first) split of mem_cap for gate evidence.
+
+    Epi-only hit fits episodic first up to 70 pct, sem-only hit fits
+    semantic first up to 70 pct; both/neither keeps semantic-first on
+    the full cap. M5 topic buffer reuses this for its own carve.
+    """
+    cap = max(0, int(cap))
+    dominant = int(cap * MEMORY_DOMINANT_SHARE)
+    if epi_hit and not sem_hit:
+        return (max(0, cap - dominant), dominant, True)
+    if sem_hit and not epi_hit:
+        return (dominant, max(0, cap - dominant), False)
+    return (cap, cap, False)
+
+
+def _combine_memory(
+    sem_text: str,
+    ep_texts: Optional[List[str]],
+    sem_hit: bool = False,
+    epi_hit: bool = False,
+    cap: Optional[int] = None,
+) -> str:
+    """One memory block inside mem_cap, split per query evidence.
+
+    Single-side input takes the full cap, as today. With both sides
+    the dominant evidence fits first (up to 70 pct) and the other
+    takes the remainder; both/neither keeps semantic-first.
+    """
+    limit = config.EFFECTIVE_MEMORY_TOKENS if cap is None else max(0, int(cap))
+    sem_clean = (sem_text or "").strip()
+    ep_lines = [
+        f"earlier: {(s or '').strip()}" for s in ep_texts or [] if (s or "").strip()
+    ]
     ep_joined = "\n".join(ep_lines).strip()
-    ep_block = truncate_text(ep_joined, rest) if ep_joined and rest > 0 else ""
+    if sem_clean and not ep_joined:
+        return _fit_memory(sem_clean, limit)[0].strip()
+    if ep_joined and not sem_clean:
+        return _fit_memory(ep_joined, limit)[0].strip()
+    if not sem_clean and not ep_joined:
+        return ""
+    sem_cap, epi_cap, epi_first = _memory_shares(sem_hit, epi_hit, limit)
+    if epi_first:
+        ep_block, epi_used = _fit_memory(ep_joined, epi_cap)
+        sem_block, sem_used = _fit_memory(sem_clean, max(0, limit - epi_used))
+    else:
+        sem_block, sem_used = _fit_memory(sem_clean, sem_cap)
+        ep_block, epi_used = _fit_memory(ep_joined, max(0, limit - sem_used))
+    logger.debug(
+        "memory split sem_hit=%s epi_hit=%s cap=%s sem_used=%s epi_used=%s",
+        sem_hit,
+        epi_hit,
+        limit,
+        sem_used,
+        epi_used,
+    )
     return "\n".join(p for p in (sem_block, ep_block) if p).strip()
 
 
@@ -196,11 +246,8 @@ class RagGraph:
         except Exception as e:
             logger.debug("episodic pool skipped: %s", e)
             epi_rows = []
-        if (
-            not needs_memory(query, memories=sem_overlap)
-            and not epi_rows
-            and not sem_rows
-        ):
+        evidence = memory_evidence(query, memories=sem_overlap, epi_rows=epi_rows)
+        if not evidence.needs_memory and not epi_rows and not sem_rows:
             return None  # memory-less turn, engine untouched
         sem_items = []
         for row in sem_rows:
@@ -279,10 +326,21 @@ class RagGraph:
             if (getattr(r, "value", "") or "").strip()
         ]
         sem_text = "\n".join(lines).strip()
-        text = _combine_memory(sem_text, ep_texts)
+        text = _combine_memory(
+            sem_text, ep_texts, sem_hit=evidence.sem_hit, epi_hit=evidence.epi_hit
+        )
         return text or None
 
     def _build(self, state: RagState) -> Dict[str, List[Dict[str, str]]]:
+        """Grounded or plain messages; memory keeps its carve first.
+
+        Effective priority order: memory carve (sem/epi split per gate
+        evidence in _combine_memory) first, then RAG hits, then history.
+        Route RAG with hits builds grounded messages, otherwise plain
+        chat. allocate() signature unchanged - needs_memory follows the
+        memory block, so strong memory evidence never loses its carve
+        to RAG hits.
+        """
         query = state.get("query", "")
         history = state.get("history", [])
         decision = state.get("decision")

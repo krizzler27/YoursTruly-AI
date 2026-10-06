@@ -759,6 +759,124 @@ class SemanticMemory(DbCase):
         _, kwargs = rag.build_messages.call_args
         self.assertIsNone(kwargs.get("memory_text"))
 
+    @_no_laya
+    def test_gate_triple_back_compat(self):
+        from services.decider import memory_evidence, needs_memory
+
+        self.assertFalse(needs_memory("how are you today"))
+        self.assertTrue(needs_memory("please remember my birthday"))
+        self.assertEqual(
+            tuple(memory_evidence("how are you today")), (False, False, False)
+        )
+        self.assertEqual(
+            tuple(memory_evidence("please remember my birthday")),
+            (True, True, False),
+        )
+
+    @_no_laya
+    def test_gate_episodic_overlap(self):
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from services.decider import memory_evidence
+
+        cid = self.conv()
+        EpisodicMemoryRepository(self.db).create(
+            cid, "we decide the launch plan last tuesday", 0, 4
+        )
+        self.assertEqual(
+            tuple(
+                memory_evidence(
+                    "what did we decide last tuesday",
+                    db=self.db,
+                    conversation_id=cid,
+                )
+            ),
+            (True, False, True),
+        )
+        rows = EpisodicMemoryRepository(self.db).list_recent_for_query(cid, limit=10)
+        self.assertEqual(
+            tuple(memory_evidence("what did we decide last tuesday", epi_rows=rows)),
+            (True, False, True),
+        )
+
+    def test_combine_episodic_heavy_gives_epi_most_of_cap(self):
+        from services.rag_graph import _combine_memory
+
+        sem = "name: " + "Ada " * 100
+        epi = "we decide the launch plan last tuesday with the team"
+        out = _combine_memory(sem, [epi], sem_hit=False, epi_hit=True, cap=40)
+        self.assertIn("earlier: " + epi, out)
+        self.assertNotIn(sem.strip(), out)
+
+    def test_combine_semantic_heavy_gives_sem_most_of_cap(self):
+        from services.rag_graph import _combine_memory
+
+        sem = "name: " + "Ada " * 100
+        epi = "we decide the launch plan last tuesday with the team"
+        out = _combine_memory(sem, [epi], sem_hit=True, epi_hit=False, cap=40)
+        self.assertIn("name: Ada", out)
+        self.assertNotIn("earlier: " + epi, out)
+
+    def test_combine_no_evidence_keeps_semantic_first(self):
+        from services.rag_graph import _combine_memory
+
+        big_sem = "name: " + "Ada " * 5000
+        out = _combine_memory(big_sem, ["user likes ramen"])
+        self.assertIn("name:", out)
+        self.assertNotIn("ramen", out)
+
+    @_no_laya
+    def test_memory_text_episodic_error_degrades_to_semantic_only(self):
+        from repository.episodic_repository import EpisodicMemoryRepository
+
+        self.repo().upsert("name", "Ada")
+        cid = self.conv()
+        EpisodicMemoryRepository(self.db).create(cid, "user likes ramen", 0, 8)
+        engine = FakeMemoryEmbed()
+        g, _ = self.memory_graph(engine)
+        with patch.object(
+            EpisodicMemoryRepository,
+            "list_recent_for_query",
+            side_effect=RuntimeError("db down"),
+        ):
+            text = g._memory_text("what is my name?", cid)
+        self.assertIn("Ada", text or "")
+        self.assertNotIn("earlier:", text or "")
+
+    @_no_laya
+    def test_memory_text_episodic_heavy_threading(self):
+        from unittest.mock import PropertyMock
+
+        from core.context_budget import count_tokens
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from services.decider import memory_evidence
+
+        self.repo().upsert("pet", "Bex")
+        cid = self.conv()
+        EpisodicMemoryRepository(self.db).create(
+            cid, "we decide the launch plan last tuesday", 0, 4
+        )
+        self.assertEqual(
+            tuple(
+                memory_evidence(
+                    "what did we decide last tuesday",
+                    db=self.db,
+                    conversation_id=cid,
+                )
+            ),
+            (True, False, True),
+        )
+        engine = FakeMemoryEmbed()
+        g, _ = self.memory_graph(engine)
+        with patch(
+            "config.Config.EFFECTIVE_MEMORY_TOKENS",
+            new_callable=PropertyMock,
+            return_value=60,
+        ):
+            text = g._memory_text("what did we decide last tuesday", cid)
+        self.assertIn("tuesday", text or "")
+        self.assertIn("Bex", text or "")
+        self.assertLessEqual(count_tokens(text or ""), 60)
+
 
 class AppContract(unittest.TestCase):
     def test_openapi_builds(self):

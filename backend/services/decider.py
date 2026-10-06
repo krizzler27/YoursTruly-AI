@@ -5,13 +5,14 @@ WEB and other capabilities slot in as new route values plus branches.
 Graders (hits, grounding, answer) land here as knobs when needed.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 import uuid
 
 from sqlalchemy.orm import Session
 
 from config import config
 from repository.document_repository import DocumentRepository
+from repository.episodic_repository import EpisodicMemoryRepository
 from repository.semantic_repository import SemanticMemoryRepository, memory_tokens
 from core.logging import get_logger
 from schemas.rag_schemas import RouteDecision
@@ -72,13 +73,24 @@ class Decider:
             mem_hits = SemanticMemoryRepository(self.db).find_relevant(clean, limit=5)
         except Exception:
             mem_hits = []
-        laya_decision = self._laya_decide(clean, recent, attached, mem_hits)
+        laya_decision = self._laya_decide(
+            clean, recent, attached, mem_hits, conversation_id
+        )
         if laya_decision is not None:
             return laya_decision
-        mem_flag = _needs_memory_stub(clean, recent, memories=mem_hits)
+        sem_hit, epi_hit = _stub_evidence(
+            clean, recent, mem_hits, self.db, conversation_id
+        )
+        mem_flag = bool(sem_hit or epi_hit)
         # mem_flag feeds allocate(needs_memory=...) in build_messages;
         # RagGraph._build passes the same rows as memory_text.
-        logger.debug("memory gate needs_memory=%s mem_hits=%s", mem_flag, len(mem_hits))
+        logger.debug(
+            "memory gate needs_memory=%s sem=%s epi=%s mem_hits=%s",
+            mem_flag,
+            sem_hit,
+            epi_hit,
+            len(mem_hits),
+        )
 
         inventory = "\n".join(
             f"- {d.filename}" + (f": {d.summary}" if (d.summary or "").strip() else "")
@@ -131,6 +143,7 @@ class Decider:
         recent: List[Dict[str, str]],
         attached,
         mem_hits,
+        conversation_id: Optional[uuid.UUID] = None,
     ) -> Optional[RouteDecision]:
         """One transient Laya call for route plus needs-memory.
 
@@ -157,7 +170,16 @@ class Decider:
             if p_mem >= config.LAYA_MEMORY_THRESHOLD:
                 mem_flag = True
             else:
-                mem_flag = _needs_memory_stub(clean, recent, memories=mem_hits)
+                sem_hit, epi_hit = _stub_evidence(
+                    clean, recent, mem_hits, self.db, conversation_id
+                )
+                mem_flag = bool(sem_hit or epi_hit)
+                logger.debug(
+                    "laya memory below threshold mem=%s sem=%s epi=%s",
+                    mem_flag,
+                    sem_hit,
+                    epi_hit,
+                )
             decision = _laya_route(
                 label, conf, bool(attached), config.LAYA_ROUTE_THRESHOLD
             )
@@ -228,23 +250,117 @@ def _laya_route(
     return RouteDecision(route="DIRECT", reason="laya low-conf no docs")
 
 
-def needs_memory(
+EPISODIC_GATE_LIMIT = 10
+
+
+class MemoryEvidence(NamedTuple):
+    """Gate triple - overall flag plus per-store hits for the split."""
+
+    needs_memory: bool
+    sem_hit: bool
+    epi_hit: bool
+
+
+def _gate_episodic_rows(db, conversation_id, limit: int = EPISODIC_GATE_LIMIT):
+    """Recent episodic rows for the gate, [] without chat or on error."""
+    try:
+        if db is None or conversation_id is None:
+            return []
+        return list(
+            EpisodicMemoryRepository(db).list_recent_for_query(
+                conversation_id, limit=limit
+            )
+            or []
+        )
+    except Exception as e:
+        logger.debug("episodic gate skipped: %s", e)
+        return []
+
+
+def _episodic_overlap(query: str, epi_rows) -> bool:
+    """True on token overlap with any recent summary, no vector."""
+    toks = memory_tokens(query)
+    if not toks:
+        return False
+    try:
+        for row in epi_rows or []:
+            if isinstance(row, str):
+                text = row
+            elif isinstance(row, dict):
+                text = row.get("summary", "") or ""
+            else:
+                text = getattr(row, "summary", "") or ""
+            if toks & memory_tokens(text):
+                return True
+    except Exception as e:
+        logger.debug("episodic overlap skipped: %s", e)
+        return False
+    return False
+
+
+def _stub_evidence(query, history, memories, db, conversation_id):
+    """Stub sem hit plus cheap episodic overlap, no Laya call."""
+    sem_hit = _needs_memory_stub(query, history, memories)
+    epi_hit = _episodic_overlap(query, _gate_episodic_rows(db, conversation_id))
+    return bool(sem_hit), bool(epi_hit)
+
+
+def memory_evidence(
     query: str,
     history: Optional[List[Dict[str, str]]] = None,
     memories=None,
-) -> bool:
-    """Recall gate - Laya first, keyword stub below threshold or on error."""
+    db=None,
+    conversation_id: Optional[uuid.UUID] = None,
+    epi_rows=None,
+) -> MemoryEvidence:
+    """Gate triple - Laya first, stub plus episodic overlap below it.
+
+    needs_memory is Laya True OR stub True OR episodic overlap True.
+    sem_hit and epi_hit drive the mem_cap split in _combine_memory.
+    Pass epi_rows to skip the pool fetch; no vector at gate time.
+    """
+    laya_hit = False
     try:
         state = {"query": query or "", "history": _history_text(history)}
         res = LayaService.get_instance().predict(
             state, {"needs_memory": NEEDS_MEMORY_QUESTION}
         )
         answers = (res or {}).get("answers") or {}
-        if _parse_noul(answers, "needs_memory") >= config.LAYA_MEMORY_THRESHOLD:
-            return True
+        laya_hit = (
+            _parse_noul(answers, "needs_memory") >= config.LAYA_MEMORY_THRESHOLD
+        )
     except Exception as e:
         logger.debug("laya memory gate skipped: %s", e)
-    return _needs_memory_stub(query, history, memories)
+    sem_hit = _needs_memory_stub(query, history, memories)
+    if epi_rows is None:
+        epi_rows = _gate_episodic_rows(db, conversation_id)
+    epi_hit = _episodic_overlap(query, epi_rows)
+    return MemoryEvidence(
+        needs_memory=bool(laya_hit or sem_hit or epi_hit),
+        sem_hit=bool(sem_hit),
+        epi_hit=bool(epi_hit),
+    )
+
+
+def needs_memory(
+    query: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    memories=None,
+    db=None,
+    conversation_id: Optional[uuid.UUID] = None,
+    epi_rows=None,
+) -> bool:
+    """Recall gate - Laya first, stub plus episodic overlap below it."""
+    return bool(
+        memory_evidence(
+            query,
+            history=history,
+            memories=memories,
+            db=db,
+            conversation_id=conversation_id,
+            epi_rows=epi_rows,
+        ).needs_memory
+    )
 
 
 def _needs_memory_stub(
