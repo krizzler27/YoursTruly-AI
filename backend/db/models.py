@@ -1,5 +1,5 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-from sqlalchemy import func, ForeignKey, UniqueConstraint
+from sqlalchemy import String, func, ForeignKey, Index, UniqueConstraint
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -26,6 +26,9 @@ class ConversationsModel(Base, TimestampMixin):
         default=uuid6.uuid7        
     )
     title: Mapped[str]
+    topic: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None, index=True
+    )
 
 class MessagesModel(Base, TimestampMixin):
 
@@ -74,3 +77,39 @@ class DocumentChunksModel(Base):
     heading: Mapped[str] = mapped_column(default="")
     page: Mapped[int | None] = mapped_column(default=None)
     text: Mapped[str] = mapped_column()
+
+
+class SemanticMemoryModel(Base, TimestampMixin):
+    """Durable user facts - name, prefs, shared across chats."""
+
+    __tablename__ = "semantic_memory"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid6.uuid7
+    )
+    key: Mapped[str] = mapped_column(index=True, unique=True)
+    value: Mapped[str] = mapped_column(default="")
+
+
+class EpisodicMemoryModel(Base, TimestampMixin):
+    """Summarized older turns per chat - episodic recall window."""
+
+    __tablename__ = "episodic_memory"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid6.uuid7
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    summary: Mapped[str] = mapped_column(default="")
+    turn_start: Mapped[int] = mapped_column(default=0)
+    turn_end: Mapped[int] = mapped_column(default=0)
+    recall_count: Mapped[int] = mapped_column(default=0)
+    last_recalled_at: Mapped[Optional[datetime]] = mapped_column(nullable=True, default=None)
+
+    __table_args__ = (
+        Index("ix_episodic_memory_conversation_created", "conversation_id", "created_at"),
+    )

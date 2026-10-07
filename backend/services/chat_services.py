@@ -59,6 +59,16 @@ class ChatServices:
             raise ValueError(f"Conversation {conversation_id} not found")
         return conv
 
+    def set_topic(
+        self, conversation_id: uuid.UUID, topic: Optional[str]
+    ) -> ConversationsModel:
+        """Tag a conversation, None or blank clears the tag."""
+        conv = self.chat_repo.set_topic(conversation_id, topic)
+        if conv is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        logger.info("Conversation topic set - id=%s topic=%s", conv.id, conv.topic)
+        return conv
+
     def delete_conversation(self, conversation_id: uuid.UUID) -> None:
         """Delete conversation, its messages (cascade) and its attached docs."""
         rag = RagService(self.db)
@@ -67,9 +77,37 @@ class ChatServices:
                 rag.delete_document(doc.id)
             except ValueError:
                 pass  # already gone
+        try:
+            from repository.episodic_repository import EpisodicMemoryRepository
+
+            EpisodicMemoryRepository(self.db).delete_by_conversation(conversation_id)
+        except Exception as e:
+            logger.debug("episodic cleanup skipped: %s", e)
         ok = self.chat_repo.delete(conversation_id)
         if not ok:
             raise ValueError(f"Conversation {conversation_id} not found")
+
+    def maybe_rollup(self, conversation_id: uuid.UUID) -> Optional[str]:
+        """Sync episodic write; fail-open, never raises.
+
+        Foreground-safe only on the cheap no-trigger path (history<=2 fast
+        return). A triggered turn runs a full SLM summarize inline, so the
+        request path prefers RollupJob.submit; kept for tests/back-compat.
+        """
+        try:
+            history = self.get_history(conversation_id, limit=100)
+            if len(history) <= 2:
+                return None
+            from core.context_budget import allocate
+            from services.episodic_service import EpisodicService
+
+            usable = allocate(route="DIRECT", needs_memory=False, query_tokens=0)["usable"]
+            return EpisodicService(self.db).rollup_if_needed(
+                conversation_id, history, usable
+            )
+        except Exception as e:
+            logger.debug("episodic rollup skipped: %s", e)
+            return None
 
     def get_history(self, conversation_id: uuid.UUID, limit: int = 5) -> List[dict]:
         """Return last `limit` messages as LLM-ready dicts."""

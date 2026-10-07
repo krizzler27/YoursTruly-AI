@@ -12,6 +12,7 @@ from core.middleware import RequestIdMiddleware
 from router import chat_api, llmfit_api, rag_api
 from db.models import Base
 from db.db_engine import engine
+from db.migrate import ensure_schema
 from services.llama_engine import LlamaEngine
 
 logger = get_logger(__name__)
@@ -22,8 +23,14 @@ async def lifespan(app: FastAPI):
     setup_logging(config.LOG_LEVEL)
     logger.info("startup")
     Base.metadata.create_all(bind=engine)
+    try:
+        migrated = ensure_schema(engine)
+        logger.info("schema migration done - added=%d", len(migrated))
+    except Exception as e:
+        logger.warning("schema migration skipped: %s", e)
 
     try:
+        # Chat slot only; the worker slot stays lazy (load on demand, unload after).
         LlamaEngine.get_instance("chat").load()
         logger.info("Chat Model loaded")
     except Exception as e:

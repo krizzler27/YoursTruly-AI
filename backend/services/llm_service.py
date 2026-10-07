@@ -38,19 +38,40 @@ class LLMService:
 
     @staticmethod
     def build_chat_messages(
-        history: List[Dict[str, str]], current_query: str
+        history: Optional[List[Dict[str, str]]],
+        current_query: str,
+        cap_tokens: Optional[int] = None,
+        memory_text: Optional[str] = None,
+        topic_text: Optional[str] = None,
     ) -> List[Dict[str, str]]:
-        if not history:
+        """Render chat prompt; token-fit history only when cap is set.
+
+        topic_text carries sibling-project lines already fitted to the
+        history remainder, so it appends to the history block verbatim.
+        """
+        turns = list(history or [])
+        if cap_tokens is not None:
+            from core.context_budget import fit_history
+
+            turns, _, _ = fit_history(turns, cap_tokens)
+        if not turns:
             history_block = "No prior conversation."
         else:
             lines = []
-            for m in history:
+            for m in turns:
                 role = "User" if m.get("role") == "user" else "Assistant"
                 lines.append(f"{role}: {m.get('content', '')}")
             history_block = "\n".join(lines)
+        topic_clean = (topic_text or "").strip()
+        if topic_clean:
+            if history_block == "No prior conversation.":
+                history_block = topic_clean
+            else:
+                history_block = f"{history_block}\n{topic_clean}"
         system_content = PromptManager.render(
             "chat_instruction.j2",
             history_block=history_block,
+            memory_block=(memory_text or "").strip(),
         )
         return [
             {"role": "system", "content": system_content},

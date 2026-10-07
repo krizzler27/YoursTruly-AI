@@ -36,11 +36,31 @@ class Config(BaseSettings):
     LLAMA_MODEL_PATH: str = _default_models_dir()
     LLAMA_CHAT_MODEL: Optional[str] = None  # explicit chat GGUF, else finder picks most-recent
     LLAMA_EMBED_MODEL: Optional[str] = None  # explicit embed GGUF, else finder picks nomic
-    LLAMA_N_CTX: Optional[int] = None  # auto: 4096 (<16GB) / 8192 (>=16GB)
+    LLAMA_WORKER_MODEL: Optional[str] = "LFM2.5-1.2B-Instruct-Q4_K_M.gguf"  # explicit worker GGUF, else finder picks small qwen
+    LLAMA_N_CTX: Optional[int] = None  # auto: 4096 (<12GB) / 8192 (>=12GB)
     LLAMA_N_THREADS: Optional[int] = None  # auto: psutil physical cores
     LLAMA_N_GPU_LAYERS: Optional[int] = None  # auto: -1 Vulkan else 0
     DATABASE_URL: str = "sqlite+pysqlite:///yourstrulyai.db"
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"  # dev console verbosity; silent in frozen exe
+    SAFETY_MARGIN: int = 256  # tokens held back from every window
+    ANSWER_RESERVE_4K: int = 512  # decode headroom on the 4096 bin
+    ANSWER_RESERVE_8K: int = 768  # decode headroom on the 8192 bin
+    RAG_MAX_SHARE_4K: float = 0.7  # RAG fraction of usable on 4096
+    RAG_MAX_SHARE_8K: float = 0.6  # RAG fraction of usable on 8192
+    HISTORY_MAX_SHARE_4K: float = 0.9  # history fraction of usable on 4096
+    HISTORY_MAX_SHARE_8K: float = 0.8  # history fraction of usable on 8192
+    MEMORY_MAX_TOKENS_4K: int = 300  # memory carve-out on 4096
+    MEMORY_MAX_TOKENS_8K: int = 500  # memory carve-out on 8192
+    SUMMARY_TRIGGER: float = 0.85  # usable fraction that triggers episodic write
+    SUMMARY_TIMEOUT_S: int = 30  # summary call budget before truncate fallback
+    SUMMARY_MODEL_ROLE: str = "chat"  # summary slot until worker lands
+    MIN_WORKER_RAM_GB: float = 12.0  # worker auto-route floor - true-16GB with up to ~4GB hardware reserve qualifies; 12GB-class and below stay out
+    LAYA_MODEL_DIR: str = "backend/laya-model"  # fine-tuned Laya weights, repo-root-relative unless absolute
+    LAYA_ROUTE_THRESHOLD: float = 0.8  # route confidence gate, smoke-test bar per docs/laya.md
+    LAYA_MEMORY_THRESHOLD: float = 0.8  # needs-memory confidence gate, same bar
+    LAYA_HIT_THRESHOLD: float = 0.8  # hit-grade confidence gate, below keeps fused order (advisory)
+    LAYA_GROUND_THRESHOLD: float = 0.8  # is_grounded confidence gate, below substitutes the refusal
+    LAYA_REWRITE_THRESHOLD: float = 0.8  # rewrite-needed confidence gate, below keeps original query
 
     @property
     def IS_DEV(self) -> bool:
@@ -49,10 +69,11 @@ class Config(BaseSettings):
 
     @property
     def EFFECTIVE_N_CTX(self) -> int:
-        """Resolved ctx: explicit override else RAM tier bins."""
+        """Resolved ctx: explicit override else RAM tier bins - 12GB-class and below stay 4096, 12GB and up get 8192."""
         if self.LLAMA_N_CTX is not None:
             return int(self.LLAMA_N_CTX)
-        return 8192 if total_ram_gb() >= 16.0 else 4096
+        # Same line as the worker threshold: true-16GB boxes with carve-out reporting 13+ usable qualify.
+        return 8192 if total_ram_gb() >= 12.0 else 4096
 
     @property
     def EFFECTIVE_N_THREADS(self) -> int:
@@ -60,6 +81,26 @@ class Config(BaseSettings):
         if self.LLAMA_N_THREADS is not None:
             return int(self.LLAMA_N_THREADS)
         return physical_cores()
+
+    @property
+    def EFFECTIVE_ANSWER_RESERVE(self) -> int:
+        """Decode headroom for the active window bin."""
+        return self.ANSWER_RESERVE_8K if self.EFFECTIVE_N_CTX >= 8192 else self.ANSWER_RESERVE_4K
+
+    @property
+    def EFFECTIVE_RAG_SHARE(self) -> float:
+        """RAG fraction of usable tokens for the active bin."""
+        return self.RAG_MAX_SHARE_8K if self.EFFECTIVE_N_CTX >= 8192 else self.RAG_MAX_SHARE_4K
+
+    @property
+    def EFFECTIVE_HISTORY_SHARE(self) -> float:
+        """History fraction of usable tokens for the active bin."""
+        return self.HISTORY_MAX_SHARE_8K if self.EFFECTIVE_N_CTX >= 8192 else self.HISTORY_MAX_SHARE_4K
+
+    @property
+    def EFFECTIVE_MEMORY_TOKENS(self) -> int:
+        """Memory carve-out for the active window bin."""
+        return self.MEMORY_MAX_TOKENS_8K if self.EFFECTIVE_N_CTX >= 8192 else self.MEMORY_MAX_TOKENS_4K
 
     @property
     def EFFECTIVE_CHAT_MODEL(self) -> str:
