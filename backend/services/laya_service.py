@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 # Frozen question templates, byte-identical to training and to the smoke
 # test in backend/notebooks/laya_dataset/test_finetuned.py CASES. Wording
-# is model input: never reword without retraining (docs/laya.md 5.3).
+# is model input: never reword without retraining (docs/laya.md 3.3).
 ROUTE_QUESTION = {
     "type": "choice",
     "instructions": "Which capability should serve this message?",

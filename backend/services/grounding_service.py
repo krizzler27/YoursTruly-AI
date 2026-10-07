@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 
 # Frozen question template, byte-identical to training and to the smoke
 # test CASES ("grounding hallucinated"). Wording is model input: never
-# reword without retraining (docs/laya.md 5.3).
+# reword without retraining (docs/laya.md 3.3).
 IS_GROUNDED_QUESTION = {
     "type": "noul",
     "instructions": "Is this answer fully supported by the provided context, with no outside facts?",

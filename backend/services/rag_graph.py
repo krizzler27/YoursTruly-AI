@@ -32,7 +32,7 @@ TOPIC_SIBLING_MAX_LINES = 3
 
 # Frozen rewrite-needed template, byte-identical to training rows and to
 # the smoke test in backend/notebooks/laya_dataset/test_finetuned.py.
-# Wording is model input: never reword without retraining (docs/laya.md 5.3).
+# Wording is model input: never reword without retraining (docs/laya.md 3.3).
 REWRITE_QUESTION = {
     "type": "noul",
     "instructions": "Does this query need rewriting to be self-contained for retrieval?",
