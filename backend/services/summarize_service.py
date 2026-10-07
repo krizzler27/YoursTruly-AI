@@ -32,6 +32,34 @@ DEFAULT_SUMMARY_ROLE = "chat"
 _CHAT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="summary-chat")
 
 
+def is_degenerate(text: str) -> bool:
+    """True when SLM output looks like a repetition loop.
+
+    Flags token-level runs of the same token 4+ times consecutively
+    (case-insensitive, surrounding punctuation ignored) or a unique-token
+    ratio below 0.25 on texts over 40 tokens. Blank input is not
+    degenerate - blank handling stays with the caller.
+    """
+    raw = (text or "").split()
+    if not raw:
+        return False
+    norm = [t.strip(".,!?;:\"'()[]{}").lower() for t in raw]
+    norm = [t for t in norm if t]
+    if not norm:
+        return False
+    run = 1
+    for i in range(1, len(norm)):
+        if norm[i] == norm[i - 1]:
+            run += 1
+            if run >= 4:
+                return True
+        else:
+            run = 1
+    if len(norm) > 40 and (len(set(norm)) / len(norm)) < 0.25:
+        return True
+    return False
+
+
 def extractive_fallback(text: str, max_chars: int) -> str:
     """First non-empty lines joined, truncated - no model needed."""
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
@@ -83,7 +111,7 @@ def _run_chat(text: str, max_tokens: int) -> str:
     messages = [
         {"role": "user", "content": PromptManager.render("doc_summary.j2", doc_text=text)}
     ]
-    return (svc.invoke(messages, max_tokens=max_tokens, temperature=0.2) or "").strip()
+    return (svc.invoke(messages, max_tokens=max_tokens, temperature=0.6, repeat_penalty=1.1) or "").strip()
 
 
 def _run_worker(text: str, max_tokens: int) -> str:
@@ -95,7 +123,7 @@ def _run_worker(text: str, max_tokens: int) -> str:
         messages: List[Dict[str, str]] = [
             {"role": "user", "content": PromptManager.render("doc_summary.j2", doc_text=text)}
         ]
-        return (svc.invoke(messages, max_tokens=max_tokens, temperature=0.2) or "").strip()
+        return (svc.invoke(messages, max_tokens=max_tokens, temperature=0.6, repeat_penalty=1.1) or "").strip()
     finally:
         engine.unload()
 
@@ -114,6 +142,8 @@ def summarize_text(
     skips while the engine is generating (summary_skipped_busy) and enforces
     timeout through the shared pool, logging summary_timeout on expiry.
     Blank input returns "" and any failure returns the first-lines fallback.
+    Degenerate SLM output (repetition loop) logs summary_degenerate_fallback
+    and returns the same extractive fallback as a model failure.
     Without an explicit role, boxes at or above MIN_WORKER_RAM_GB with
     a real worker GGUF auto-route to worker so background summaries
     skip the chat single-flight guard.
@@ -135,6 +165,9 @@ def summarize_text(
             return extractive_fallback(head, fallback_chars)
         except Exception as e:
             logger.warning("summary SLM failed, extractive fallback: %s", e)
+            return extractive_fallback(head, fallback_chars)
+        if is_degenerate(out):
+            logger.warning("summary_degenerate_fallback slot=%s", slot)
             return extractive_fallback(head, fallback_chars)
         if not out:
             return extractive_fallback(head, fallback_chars)
@@ -159,6 +192,9 @@ def summarize_text(
         return extractive_fallback(head, fallback_chars)
     except Exception as e:
         logger.warning("summary SLM failed, extractive fallback: %s", e)
+        return extractive_fallback(head, fallback_chars)
+    if is_degenerate(out):
+        logger.warning("summary_degenerate_fallback slot=%s", slot)
         return extractive_fallback(head, fallback_chars)
     if not out:
         return extractive_fallback(head, fallback_chars)

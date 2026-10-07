@@ -229,3 +229,97 @@ class SummarizeAutoRoute(TestCase):
                          return_value=("/models/chat.gguf", True)), \
             patch.object(config_obj, "SUMMARY_MODEL_ROLE", "worker"):
             self.assertEqual(summ_mod.resolve_slot(), "worker")
+
+
+class SummarizeDegenerate(TestCase):
+    def test_is_degenerate_repetition(self):
+        self.assertTrue(summ_mod.is_degenerate("I I I I I ..."))
+        self.assertTrue(summ_mod.is_degenerate("go go go go stop"))
+        self.assertTrue(summ_mod.is_degenerate("Go GO go GO onward"))
+        self.assertFalse(summ_mod.is_degenerate("go go go stop now"))
+        self.assertFalse(summ_mod.is_degenerate(""))
+        self.assertFalse(summ_mod.is_degenerate("   "))
+        self.assertFalse(summ_mod.is_degenerate("hello summary"))
+
+    def test_is_degenerate_low_diversity(self):
+        low = ("alpha beta " * 25).strip()
+        self.assertTrue(summ_mod.is_degenerate(low))
+        varied = " ".join(f"word-{i}" for i in range(50))
+        self.assertFalse(summ_mod.is_degenerate(varied))
+
+    def test_chat_degenerate_falls_back_to_extractive(self):
+        fake = FakeEngine(generating=False)
+        with patch.object(summ_mod, "LLMService") as mock_llm, \
+            patch.object(summ_mod, "LlamaEngine") as mock_eng:
+            mock_eng.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = "I I I I I I ..."
+            out = summ_mod.summarize_text("line one\nline two", max_tokens=10, role="chat")
+        self.assertEqual(out, "line one / line two")
+
+    def test_worker_degenerate_falls_back_to_extractive(self):
+        fake = FakeEngine(generating=False)
+        with patch.object(summ_mod, "LLMService") as mock_llm, \
+            patch.object(summ_mod, "WorkerEngine") as mock_worker:
+            mock_worker.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = "I I I I I I ..."
+            out = summ_mod.summarize_text("line one\nline two", max_tokens=10, role="worker")
+        self.assertEqual(out, "line one / line two")
+        self.assertEqual(fake.unloads, 1)
+
+    def test_worker_low_diversity_falls_back(self):
+        fake = FakeEngine(generating=False)
+        low = ("alpha beta " * 25).strip()
+        with patch.object(summ_mod, "LLMService") as mock_llm, \
+            patch.object(summ_mod, "WorkerEngine") as mock_worker:
+            mock_worker.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = low
+            out = summ_mod.summarize_text("line one\nline two", max_tokens=60, role="worker")
+        self.assertEqual(out, "line one / line two")
+
+    def test_near_threshold_normal_passes_through(self):
+        normal = "go go go then we left for the market with fresh bread and cheese"
+        self.assertFalse(summ_mod.is_degenerate(normal))
+        fake = FakeEngine(generating=False)
+        with patch.object(summ_mod, "LLMService") as mock_llm, \
+            patch.object(summ_mod, "LlamaEngine") as mock_eng:
+            mock_eng.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = normal
+            out = summ_mod.summarize_text("some long text here", max_tokens=32, role="chat")
+        self.assertEqual(out, normal)
+
+    def test_chat_invoke_kwargs_temp_and_penalty(self):
+        fake = FakeEngine(generating=False)
+        with patch.object(summ_mod, "LLMService") as mock_llm, \
+            patch.object(summ_mod, "LlamaEngine") as mock_eng:
+            mock_eng.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = "a fine normal summary here"
+            summ_mod.summarize_text("some long text here", max_tokens=32, role="chat")
+        kwargs = mock_llm.return_value.invoke.call_args[1]
+        self.assertEqual(kwargs.get("temperature"), 0.6)
+        self.assertEqual(kwargs.get("repeat_penalty"), 1.1)
+
+    def test_worker_invoke_kwargs_temp_and_penalty(self):
+        fake = FakeEngine(generating=False)
+        with patch.object(summ_mod, "LLMService") as mock_llm, \
+            patch.object(summ_mod, "WorkerEngine") as mock_worker:
+            mock_worker.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = "a fine normal summary here"
+            summ_mod.summarize_text("some long text here", max_tokens=32, role="worker")
+        kwargs = mock_llm.return_value.invoke.call_args[1]
+        self.assertEqual(kwargs.get("temperature"), 0.6)
+        self.assertEqual(kwargs.get("repeat_penalty"), 1.1)
+
+    def test_timeout_path_output_screened(self):
+        fake = FakeEngine(generating=False)
+        with patch.object(summ_mod, "LLMService") as mock_llm, \
+            patch.object(summ_mod, "LlamaEngine") as mock_eng:
+            mock_eng.get_instance.return_value = fake
+            mock_llm.return_value.invoke.return_value = "I I I I I I ..."
+            out = summ_mod.summarize_text(
+                "line one\nline two", max_tokens=10, timeout=5.0, role="chat"
+            )
+        self.assertEqual(out, "line one / line two")
+
+    def test_blank_inputs_return_empty(self):
+        self.assertEqual(summ_mod.summarize_text("", role="chat"), "")
+        self.assertEqual(summ_mod.summarize_text("   \n  ", role="worker"), "")
