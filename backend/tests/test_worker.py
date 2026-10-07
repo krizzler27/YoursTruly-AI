@@ -67,13 +67,39 @@ class ResolveWorker(TestCase):
         self.assertEqual(path, "/tmp/fake-chat.gguf")
         self.assertTrue(fallback)
 
-    def test_qwen_pick_before_chat_fallback(self):
-        qwen = Path("/models/qwen2.5-1.5b-instruct-q4_k_m.gguf")
-        with patch.object(engine_mod, "list_models", return_value=[qwen]), \
-            patch.object(config_obj, "LLAMA_WORKER_MODEL", None):
+    def test_explicit_knob_wins(self):
+        explicit = Path("/models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf")
+        with patch.object(engine_mod, "list_models", return_value=[explicit]), \
+            patch.object(config_obj, "LLAMA_WORKER_MODEL", str(explicit)):
             path, fallback = resolve_worker_model_path()
-        self.assertEqual(path, str(qwen))
+        self.assertEqual(path, str(explicit))
         self.assertFalse(fallback)
+
+    def test_family_size_pick_beats_family_only(self):
+        lfm = Path("/models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf")
+        big = Path("/models/Qwen3.5-4B-Instruct-Q4_K_M.gguf")
+        chat = Path("/models/Phi-4-7B-chat.gguf")
+        with patch.object(engine_mod, "list_models", return_value=[big, lfm, chat]), \
+            patch.object(config_obj, "LLAMA_WORKER_MODEL", None), \
+            patch.object(
+                type(config_obj), "EFFECTIVE_CHAT_MODEL",
+                new_callable=PropertyMock, return_value=str(chat),
+            ):
+            path, fallback = resolve_worker_model_path()
+        self.assertEqual(path, str(lfm))
+        self.assertFalse(fallback)
+
+    def test_chat_model_excluded_falls_back(self):
+        chat = Path("/models/Qwen3.5-4B-Instruct-Q4_K_M.gguf")
+        with patch.object(engine_mod, "list_models", return_value=[chat]), \
+            patch.object(config_obj, "LLAMA_WORKER_MODEL", None), \
+            patch.object(
+                type(config_obj), "EFFECTIVE_CHAT_MODEL",
+                new_callable=PropertyMock, return_value=str(chat),
+            ):
+            path, fallback = resolve_worker_model_path()
+        self.assertEqual(path, str(chat))
+        self.assertTrue(fallback)
 
 
 class SummarizeChatPath(TestCase):

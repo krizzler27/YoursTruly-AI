@@ -236,8 +236,12 @@ class EmbeddingEngine(LlamaEngine):
         return vectors
 
 
+SMALL_WORKER_FAMILIES = ("lfm", "qwen", "smollm", "ministral")
+SMALL_WORKER_SIZES = ("1.2", "1.5", "1_5", "1b", "0.8b", "2b")
+
+
 def resolve_worker_model_path() -> tuple:
-    """Worker GGUF pick: explicit knob, else newest small qwen, else chat path.
+    """Worker GGUF pick: explicit knob, else newest small family, else chat path.
 
     Returns (path, is_fallback) where fallback means the chat model path,
     used on 8GB boxes or when no worker GGUF is installed. Pure path
@@ -255,18 +259,39 @@ def resolve_worker_model_path() -> tuple:
         cands = list_models("chat") or []
     except Exception:
         cands = []
+    try:
+        chat_path = str(config.EFFECTIVE_CHAT_MODEL)
+    except Exception:
+        chat_path = None
+    if chat_path:
+        try:
+            chat_resolved = str(Path(chat_path).resolve())
+        except Exception:
+            chat_resolved = chat_path
+        kept = []
+        for p in cands:
+            try:
+                if str(Path(p).resolve()) == chat_resolved:
+                    continue
+            except Exception:
+                if str(p) == chat_path:
+                    continue
+            kept.append(p)
+        cands = kept
     for p in cands:
         n = p.name.lower()
-        if "qwen" in n and ("1.5" in n or "1_5" in n or "1b" in n):
+        if any(f in n for f in SMALL_WORKER_FAMILIES) and any(
+            s in n for s in SMALL_WORKER_SIZES
+        ):
             return str(p), False
     for p in cands:
-        if "qwen" in p.name.lower():
+        if any(f in p.name.lower() for f in SMALL_WORKER_FAMILIES):
             return str(p), False
     return str(config.EFFECTIVE_CHAT_MODEL), True
 
 
 class WorkerEngine(LlamaEngine):
-    """Small-model slot (qwen1.5B instruct Q4_K_M) for background summaries.
+    """Small-model slot (small instruct Q4_K_M) for background summaries.
 
     Load on demand, unload after - same transient pattern as EmbeddingEngine
     in RagGraph. Never preloaded in main lifespan; the chat slot stays
