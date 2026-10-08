@@ -22,7 +22,8 @@ Thumbs.db
 # Notebooks (local experiments)
 notebooks/
 *.ipynb
-.devplans
+.dev/
+docs/agents/
 
 # DB (local, not committed)
 *.db

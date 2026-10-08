@@ -3,9 +3,9 @@
 This pipeline handles one user message from request to streamed reply, choosing plain or file-grounded answering and keeping the turn safe when anything fails. RAG means answering from uploaded files by retrieving relevant chunks first, and it is the file-grounded branch of this pipeline. Replies stream over SSE, which is server-sent events where the server pushes text chunks as they arrive. Use this doc to follow the per-turn order, check the streaming contract, and run copy-paste debug commands, with background work explained last.
 
 Detail lives elsewhere by pointer only:
-- gates (route, rewrite, grade, ground) - `docs/laya.md`
+- gates (route, rewrite, grade, ground) - `docs/laya-integration.md`
 - budget shares, memory blocks, episodic rollup - `docs/memory-system.md`. Rollup is the background job that summarizes older turns into episodic memory after a turn is saved.
-- chat and worker slots, streaming, model health - `docs/inference-engine.md`. A slot is one model holder with one role where only one generation runs at a time.
+- chat and worker slots, streaming, model health - `docs/llama-inference-engine.md`. A slot is one model holder with one role where only one generation runs at a time.
 - retrieval, ingest, chunk layout - `docs/rag.md`
 
 ## 1. Per-turn flow - read this first
@@ -18,11 +18,11 @@ One `POST /api/chat/stream` runs this order. Refs are the claim.
 4. Optional model switch - `engine.switch_model` only when `request.model` is non-blank - `backend/router/chat_api.py:49-50`.
 5. Dispatch - `start_time` starts TTFT here so it covers agent work, `run_agentic` runs in a thread - `backend/router/chat_api.py:52-57` and `backend/services/chat_services.py:127-135`.
 6. Graph wiring - `decide` branches to `retrieve` on RAG else `build` - `backend/services/rag_graph.py:252-262`.
-7. Decide node - decider call on query plus last 2 history turns, any exception falls back to DIRECT - `backend/services/rag_graph.py:303-315`. The decider is the component that picks DIRECT or RAG for the turn. Gate policy lives in `docs/laya.md`, not here.
+7. Decide node - decider call on query plus last 2 history turns, any exception falls back to DIRECT - `backend/services/rag_graph.py:303-315`. The decider is the component that picks DIRECT or RAG for the turn. Gate policy lives in `docs/laya-integration.md`, not here.
 8. Retrieve node - rewrite runs before any generation acquire, `rag.search` is scoped by conversation, error flips to DIRECT with reason `retrieval error`, zero hits flips to DIRECT with reason `no hits` - `backend/services/rag_graph.py:417-449` and `backend/services/rag_graph.py:347-415`. Retrieval detail lives in `docs/rag.md`.
 9. Build node - memory text plus topic sibling lines feed one builder: RAG-with-hits builds grounded messages, otherwise plain chat - `backend/services/rag_graph.py:615-645` and `backend/services/rag_service.py:244-359`. Budget and memory detail lives in `docs/memory-system.md`.
-10. Start generation - `llm.astream_chat` with temperature 0.5 on RAG else 0.6 - `backend/router/chat_api.py:59-64`. Slot behavior lives in `docs/inference-engine.md`.
-11. Gate branch - `should_gate` is true only for RAG-with-hits - `backend/router/chat_api.py:66` and `backend/services/grounding_service.py:38-40`. Grade policy lives in `docs/laya.md`.
+10. Start generation - `llm.astream_chat` with temperature 0.5 on RAG else 0.6 - `backend/router/chat_api.py:59-64`. Slot behavior lives in `docs/llama-inference-engine.md`.
+11. Gate branch - `should_gate` is true only for RAG-with-hits - `backend/router/chat_api.py:66` and `backend/services/grounding_service.py:38-40`. Grade policy lives in `docs/laya-integration.md`.
 12. Direct path - pull first delta for TTFT, wrap as SSE, persist assistant reply, submit rollup, emit `[DONE]` - `backend/router/chat_api.py:78-141`.
 13. Gated path - `_gated_response` resolves filenames, buffers the draft, grades, streams buffered parts in order on pass or skip and refusal on fail, persists the sent text, submits rollup, emits `[DONE]` - `backend/router/chat_api.py:149-222` and `backend/services/grounding_service.py:143-168`.
 14. CRUD outside turns - create, list, list messages, rename plus topic, delete with cascade - `backend/router/chat_api.py:225-287`. Delete removes docs and episodic rows in code and messages via FK cascade - `backend/services/chat_services.py:72-88` and `backend/db/models.py:41`.

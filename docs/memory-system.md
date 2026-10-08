@@ -5,8 +5,8 @@ This system remembers user facts across chats and older turns within a chat, so 
 Pointers only - detail lives elsewhere:
 
 - docs/chat-pipeline.md - turn flow that calls into this budget
-- docs/laya.md - gates and scores consumed here
-- docs/inference-engine.md - summary engine used by rollup and compaction
+- docs/laya-integration.md - gates and scores consumed here
+- docs/llama-inference-engine.md - summary engine used by rollup and compaction
 
 ## 1. Budget first - everything keys off it
 
@@ -127,7 +127,10 @@ FROM episodic_memory
 WHERE conversation_id = '<uuid>';
 ```
 
-Working-topic - project tag across sibling chats.
+Working-topic - project key across sibling chats.
+Project keys are explicit, never inferred: a chat joins a project only
+when tagged deliberately, and there is no auto-title or auto-populate
+(owner decision - improvised labels fragment and pollute recall).
 Schema: `ConversationsModel.topic`, nullable indexed `String(64)`
 (`backend/db/models.py:20`). Write is PATCH topic; blank or null clears;
 normalized to strip plus 64-char cap (`backend/repository/chat_repository.py:14`,
@@ -241,7 +244,11 @@ Compaction merge plus forget rules with protections
   up to the over-cap count (`backend/services/episodic_service.py:284`);
   the just-merged row id is excluded from the same-pass forget
 
-## 5. Topic tagging API
+## 5. Topic tagging API (project keys)
+
+Topic values are project keys: short deliberate labels (`laya`, `taxes-2026`) naming the project a chat belongs to. Untagged (NULL)
+chats behave exactly as before the feature existed. Keys are never
+generated from titles or first messages.
 
 Contract: `ConversationUpdateRequest.topic` max 64 chars, null or blank
 clears (`backend/schemas/api_schemas.py:59`,

@@ -55,7 +55,29 @@ class EpisodicService:
             return None
         if not self._triggered(items, usable_tokens):
             return None
-        head = items[:-2]
+        existing = self.repo.list_by_conversation(conversation_id, limit=1000)
+        start = max([r.turn_end for r in existing] + [0])
+        # Incremental fix: only summarize messages after `start`.
+        # `items` is the last-100 window; map absolute `start` to a local
+        # offset so re-rollups don't re-summarize rows 0..start.
+        offset = 0
+        try:
+            from db.models import MessagesModel
+
+            db_total = (
+                self.db.query(MessagesModel)
+                .filter(MessagesModel.conversation_id == conversation_id)
+                .count()
+            )
+            if db_total >= len(items):
+                offset = max(0, db_total - len(items))
+        except Exception:
+            pass
+        effective_start = max(int(start), int(offset))
+        local_start = effective_start - offset
+        if local_start >= len(items) - 2:
+            return None
+        head = items[local_start:-2] if local_start > 0 else items[:-2]
         head_text = "\n".join(
             f"{'User' if (t or {}).get('role') == 'user' else 'Assistant'}: {(t or {}).get('content', '')}"
             for t in head
@@ -78,9 +100,8 @@ class EpisodicService:
         if not (summary or "").strip():
             return None
         clean = summary.strip()
-        existing = self.repo.list_by_conversation(conversation_id, limit=1000)
-        start = max([r.turn_end for r in existing] + [0])
-        self.repo.create(conversation_id, clean, start, start + len(head))
+        end = effective_start + len(head)
+        self.repo.create(conversation_id, clean, effective_start, end)
         logger.info("episodic rollup stored conv=%s turns=%s", conversation_id, len(head))
         return clean
 
