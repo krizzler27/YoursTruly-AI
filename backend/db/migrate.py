@@ -94,4 +94,33 @@ def ensure_schema(engine) -> list[str]:
                     column.name,
                     e,
                 )
+    if _migrate_topic_to_tag(engine):
+        added.append("conversations.tag<topic")
     return added
+
+
+def _migrate_topic_to_tag(engine) -> bool:
+    """Rename conversations.topic to tag, preserving values. Idempotent."""
+    try:
+        with engine.begin() as conn:
+            cols = conn.execute(text("PRAGMA table_info(conversations)")).all()
+        names = {c[1] for c in cols}
+        if "topic" not in names:
+            return False
+        with engine.begin() as conn:
+            if "tag" not in names:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN "tag" VARCHAR(64)'))
+                conn.execute(
+                    text('CREATE INDEX IF NOT EXISTS "ix_conversations_tag" '
+                         'ON "conversations" ("tag")')
+                )
+            conn.execute(
+                text("UPDATE conversations SET tag = topic "
+                     "WHERE topic IS NOT NULL AND tag IS NULL")
+            )
+            conn.execute(text("ALTER TABLE conversations DROP COLUMN topic"))
+        logger.info("migrated conversations.topic to tag")
+        return True
+    except Exception as e:
+        logger.warning("topic to tag migration skipped: %s", e)
+        return False

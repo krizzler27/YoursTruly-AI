@@ -26,9 +26,35 @@ class ConversationsModel(Base, TimestampMixin):
         default=uuid6.uuid7        
     )
     title: Mapped[str]
-    topic: Mapped[Optional[str]] = mapped_column(
+    tag: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, default=None, index=True
     )
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True, default=None, index=True,
+    )
+
+    @property
+    def topic(self) -> Optional[str]:
+        """Deprecated alias for tag, kept for old readers."""
+        return self.tag
+
+    @topic.setter
+    def topic(self, value: Optional[str]) -> None:
+        self.tag = value
+
+
+class ProjectsModel(Base, TimestampMixin):
+    """Shared project state - one summary row per project name."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid6.uuid7
+    )
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    summary: Mapped[str] = mapped_column(default="")
 
 class MessagesModel(Base, TimestampMixin):
 

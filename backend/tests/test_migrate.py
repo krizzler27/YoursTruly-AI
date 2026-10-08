@@ -86,7 +86,8 @@ class DriftedDb(MigrateCase):
     def test_missing_columns_added_rows_kept(self):
         self.make_drifted()
         before = _columns(self.eng, "conversations")
-        self.assertNotIn("topic", before)
+        self.assertNotIn("tag", before)
+        self.assertNotIn("project_id", before)
         epi_before = _columns(self.eng, "episodic_memory")
         self.assertNotIn("recall_count", epi_before)
         self.assertNotIn("last_recalled_at", epi_before)
@@ -96,14 +97,16 @@ class DriftedDb(MigrateCase):
         self.assertEqual(
             set(added),
             {
-                "conversations.topic",
+                "conversations.tag",
+                "conversations.project_id",
                 "episodic_memory.recall_count",
                 "episodic_memory.last_recalled_at",
             },
         )
         after = _columns(self.eng, "conversations")
-        self.assertIn("topic", after)
-        self.assertIn("VARCHAR(64)", str(after["topic"]["type"]))
+        self.assertIn("tag", after)
+        self.assertIn("VARCHAR(64)", str(after["tag"]["type"]))
+        self.assertIn("project_id", after)
         epi_after = _columns(self.eng, "episodic_memory")
         self.assertIn("recall_count", epi_after)
         self.assertIn("INTEGER", str(epi_after["recall_count"]["type"]))
@@ -128,21 +131,22 @@ class DriftedDb(MigrateCase):
         self.assertEqual(summary, "old summary")
         self.assertEqual(int(recall), 0)
 
-    def test_topic_index_created(self):
+    def test_tag_index_created(self):
         self.make_drifted()
         ensure_schema(self.eng)
         idx_names = {i["name"] for i in inspect(self.eng).get_indexes("conversations")}
-        self.assertIn("ix_conversations_topic", idx_names)
+        self.assertIn("ix_conversations_tag", idx_names)
 
-    def test_app_level_insert_with_topic_works(self):
+    def test_app_level_insert_with_tag_works(self):
         self.make_drifted()
         ensure_schema(self.eng)
         db = sessionmaker(bind=self.eng)()
         try:
-            row = ConversationsModel(title="new chat", topic="laya")
+            row = ConversationsModel(title="new chat", tag="laya")
             db.add(row)
             db.commit()
             db.refresh(row)
+            self.assertEqual(row.tag, "laya")
             self.assertEqual(row.topic, "laya")
             epi = EpisodicMemoryModel(
                 conversation_id=row.id, summary="fresh note",
@@ -159,7 +163,7 @@ class DriftedDb(MigrateCase):
     def test_second_run_is_noop(self):
         self.make_drifted()
         first = ensure_schema(self.eng)
-        self.assertEqual(len(first), 3)
+        self.assertEqual(len(first), 4)
         second = ensure_schema(self.eng)
         self.assertEqual(second, [])
 
@@ -171,11 +175,11 @@ class FreshDb(MigrateCase):
         self.assertEqual(added, [])
         db = sessionmaker(bind=self.eng)()
         try:
-            row = ConversationsModel(title="t", topic="laya")
+            row = ConversationsModel(title="t", tag="laya")
             db.add(row)
             db.commit()
             db.refresh(row)
-            self.assertEqual(row.topic, "laya")
+            self.assertEqual(row.tag, "laya")
         finally:
             db.close()
         # Idempotent on the fresh path too.

@@ -266,8 +266,12 @@ def update_conversation(conversation_id: uuid.UUID, req: ConversationUpdateReque
         conv = None
         if req.title is not None:
             conv = svc.rename_conversation(conversation_id, req.title)
-        if "topic" in req.model_fields_set:
-            conv = svc.set_topic(conversation_id, req.topic)
+        if "tag" in req.model_fields_set:
+            conv = svc.set_tag(conversation_id, req.tag)
+        elif "topic" in req.model_fields_set:
+            conv = svc.set_tag(conversation_id, req.topic)
+        if "project_id" in req.model_fields_set:
+            conv = svc.set_project(conversation_id, req.project_id)
         if conv is None:
             conv = svc.chat_repo.get_by_id(conversation_id)
             if conv is None:

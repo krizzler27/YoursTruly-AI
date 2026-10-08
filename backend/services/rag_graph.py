@@ -586,10 +586,10 @@ class RagGraph:
 
             db = self.rag.db
             current = ChatRepository(db).get_by_id(conversation_id)
-            topic = ((getattr(current, "topic", None) or "").strip()) if current else ""
+            topic = ((getattr(current, "tag", None) or "").strip()) if current else ""
             if not topic:
                 return []
-            siblings = ChatRepository(db).list_by_topic(
+            siblings = ChatRepository(db).list_by_tag(
                 topic, limit=10, exclude_id=conversation_id
             )
             epi_repo = EpisodicMemoryRepository(db)

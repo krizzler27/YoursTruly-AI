@@ -59,14 +59,30 @@ class ChatServices:
             raise ValueError(f"Conversation {conversation_id} not found")
         return conv
 
+    def set_tag(
+        self, conversation_id: uuid.UUID, tag: Optional[str]
+    ) -> ConversationsModel:
+        """Tag a conversation, None or blank clears the tag."""
+        conv = self.chat_repo.set_tag(conversation_id, tag)
+        if conv is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        logger.info("Conversation tag set - id=%s tag=%s", conv.id, conv.tag)
+        return conv
+
     def set_topic(
         self, conversation_id: uuid.UUID, topic: Optional[str]
     ) -> ConversationsModel:
-        """Tag a conversation, None or blank clears the tag."""
-        conv = self.chat_repo.set_topic(conversation_id, topic)
+        """Deprecated alias for set_tag."""
+        return self.set_tag(conversation_id, topic)
+
+    def set_project(
+        self, conversation_id: uuid.UUID, project_id: Optional[uuid.UUID]
+    ) -> ConversationsModel:
+        """Link a conversation to a project, None clears the link."""
+        conv = self.chat_repo.set_project(conversation_id, project_id)
         if conv is None:
             raise ValueError(f"Conversation {conversation_id} not found")
-        logger.info("Conversation topic set - id=%s topic=%s", conv.id, conv.topic)
+        logger.info("Conversation project set - id=%s project=%s", conv.id, conv.project_id)
         return conv
 
     def maybe_remember(self, query: str) -> Optional[SemanticMemoryModel]:
