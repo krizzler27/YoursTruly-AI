@@ -43,6 +43,10 @@ async def chat(request: ChatRequest, http_request: Request, db: Session = Depend
         set_conversation_id(conversation.id)
         history_prev = chat_service.get_history(conversation.id, limit=5)
         chat_service.add_message(conversation.id, "user", request.query)
+        try:
+            chat_service.maybe_remember(request.query)
+        except Exception:
+            logger.debug("maybe_remember skipped")
 
         llm = LLMService()
 

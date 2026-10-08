@@ -3,7 +3,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 
-from db.models import ConversationsModel, MessagesModel
+from db.models import ConversationsModel, MessagesModel, SemanticMemoryModel
 from core.logging import get_logger
 from core.trace import traceable
 from repository.chat_repository import ChatRepository
@@ -68,6 +68,16 @@ class ChatServices:
             raise ValueError(f"Conversation {conversation_id} not found")
         logger.info("Conversation topic set - id=%s topic=%s", conv.id, conv.topic)
         return conv
+
+    def maybe_remember(self, query: str) -> Optional[SemanticMemoryModel]:
+        """Store one explicit fact off the chat save path, None when skipped."""
+        try:
+            from services.semantic_writer import remember_explicit
+
+            return remember_explicit(self.db, query)
+        except Exception as e:
+            logger.debug("maybe_remember skipped: %s", e)
+            return None
 
     def delete_conversation(self, conversation_id: uuid.UUID) -> None:
         """Delete conversation, its messages (cascade) and its attached docs."""
