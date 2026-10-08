@@ -1,13 +1,14 @@
 """Explicit-remember write path - hardcoded patterns, no model use."""
 
 import re
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from core.logging import get_logger
 from db.models import SemanticMemoryModel
 from repository.semantic_repository import SemanticMemoryRepository
+from schemas.rag_schemas import SemanticFactList
 
 logger = get_logger(__name__)
 
@@ -130,3 +131,88 @@ def remember_explicit(db: Session, query: str) -> Optional[SemanticMemoryModel]:
     except Exception as e:
         logger.debug("explicit remember skipped: %s", e)
         return None
+
+
+EXTRACTION_MAX_TOKENS = 256
+EXTRACTION_BATCH_TURNS = 10
+
+
+def extract_facts_slm(lines: List[str]) -> List[Tuple[str, str]]:
+    """Extract (key, value) facts via worker-slot SLM, [] on any failure."""
+    batch = [ln.strip() for ln in (lines or []) if (ln or "").strip()]
+    if not batch:
+        return []
+    try:
+        from services.llama_engine import WorkerEngine
+        from services.llm_service import LLMService
+        from services.prompt_manager import PromptManager
+
+        prompt_text = PromptManager.render(
+            "extract_facts.j2",
+            user_lines="\n".join(f"- {ln}" for ln in batch),
+        )
+    except Exception as e:
+        logger.warning("extract_skipped_prompt err=%s", e)
+        return []
+    try:
+        engine = WorkerEngine.get_instance("worker")
+        engine.ensure_loaded()
+        try:
+            svc = LLMService(engine=engine)
+            result = svc.invoke(
+                [{"role": "user", "content": prompt_text}],
+                max_tokens=EXTRACTION_MAX_TOKENS,
+                temperature=0.2,
+                structured_output=SemanticFactList,
+            )
+        finally:
+            engine.unload()
+    except RuntimeError as e:
+        if "Busy" in str(e):
+            logger.warning("extract_skipped_busy err=%s", e)
+        else:
+            logger.warning("extract SLM failed, skipped: %s", e)
+        return []
+    except Exception as e:
+        logger.warning("extract SLM failed, skipped: %s", e)
+        return []
+    try:
+        assert isinstance(result, SemanticFactList)
+        return [
+            (f.key, f.value) for f in result.facts if (f.key or "").strip()
+        ]
+    except Exception as e:
+        logger.debug("extract parse skipped: %s", e)
+        return []
+
+
+def extract_and_store(db: Session, messages, limit: int = EXTRACTION_BATCH_TURNS) -> int:
+    """Extract background facts from recent user turns, count stored."""
+    try:
+        texts = [
+            (m or {}).get("content", "")
+            for m in list(messages or [])[-max(1, int(limit)):]
+            if (m or {}).get("role") == "user"
+        ]
+        batch = [
+            t.strip()
+            for t in texts
+            if (t or "").strip() and parse_explicit_fact(t) is None
+        ]
+        if not batch:
+            return 0
+        stored = 0
+        for key, value in extract_facts_slm(batch):
+            clean_key, clean_value = _clean_key(key), _clean_value(value)
+            if not clean_key or not clean_value:
+                continue
+            try:
+                SemanticMemoryRepository(db).upsert(clean_key, clean_value)
+                stored += 1
+            except Exception as e:
+                logger.debug("extract store skipped: %s", e)
+                continue
+        return stored
+    except Exception as e:
+        logger.debug("extract_and_store skipped: %s", e)
+        return 0

@@ -77,3 +77,24 @@ class RouteDecision(BaseModel):
 
     route: Literal["DIRECT", "RAG"]
     reason: str = ""
+
+
+class SemanticFact(BaseModel):
+    """One durable user fact - short key plus plain value."""
+
+    key: str
+    value: str
+
+    @field_validator("key", "value")
+    @classmethod
+    def check_nonblank(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("fact key and value cannot be blank")
+        return v
+
+
+class SemanticFactList(BaseModel):
+    """SLM extraction output - facts found in recent user turns."""
+
+    facts: List[SemanticFact] = Field(default_factory=list)

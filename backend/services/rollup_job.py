@@ -62,6 +62,13 @@ class RollupJob:
                 )
             except Exception as e:
                 logger.debug("episodic compact skipped: %s", e)
+            try:
+                from services.semantic_writer import extract_and_store
+
+                stored = extract_and_store(db, history)
+                logger.debug("semantic extract done stored=%s", stored)
+            except Exception as e:
+                logger.debug("semantic extract skipped: %s", e)
         except Exception as e:
             logger.debug("episodic rollup skipped: %s", e)
         finally:
