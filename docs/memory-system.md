@@ -76,6 +76,8 @@ ranks first, cosine vector hits at 0.5 or above
 pool is `list_all` newest-first capped at 100
 (`backend/repository/semantic_repository.py:69`); embed text clipped to
 200 chars per candidate (`backend/repository/semantic_repository.py:19`).
+Each row also stores one embedding for vector recall; detail lives in
+section 9.
 
 Inspect semantic rows (columns verified against `backend/db/models.py:82`):
 
@@ -106,7 +108,9 @@ limit 3 ranks by token overlap with recency breaking ties, vector-only
 hits filling past overlap hits (`backend/services/episodic_service.py:97`);
 hits bump `recall_count` via `mark_recalled` in one commit
 (`backend/repository/episodic_repository.py:80`). Row cap 20 triggers
-compaction (`backend/services/episodic_service.py:26`).
+compaction (`backend/services/episodic_service.py:26`). Each row also
+stores one summary embedding written at rollup; detail lives in
+section 9.
 
 Inspect episodic rows (columns verified against `backend/db/models.py:95`):
 
@@ -212,19 +216,13 @@ Rollup queue (`backend/services/rollup_job.py:26`,
   kept last 2) is summarized via `summarize_text` at max 128 tokens
   (`backend/services/episodic_service.py:26`)
 
-Rollup trigger demo - turn counts with the same `usable` budget:
+Rollup trigger demo - same `usable` budget throughout:
 
-- 9 turns, tokens under 0.85 times usable: no trigger
-  (`len <= 2` fast return misses, `_triggered` cadence misses,
-  token check misses)
-- 10 turns, even with tiny tokens: trigger
-  (`len >= 10 and len % 10 == 0`, `backend/services/episodic_service.py:87`)
-- 11 turns, tokens under threshold: no trigger
-  (cadence misses, token check misses)
-- 11 turns, tokens over 0.85 times usable: trigger
-  (token branch of `_triggered` fires)
-- 20 turns: trigger again on cadence; worker then runs
-  `compact_if_needed` in the same pass (`backend/services/rollup_job.py:38`)
+- 9 turns, small tokens: no trigger
+- 10 turns, any size: trigger (every-10 cadence)
+- 11 turns, small tokens: no trigger
+- 11 turns, tokens over 0.85 times usable: trigger (token branch)
+- 20 turns: trigger again, plus compaction in the same pass
 
 The worker reloads with `get_history(limit=100)` and derives `usable`
 from `allocate(route="DIRECT", needs_memory=False, query_tokens=0)`
@@ -237,9 +235,9 @@ Compaction merge plus forget rules with protections
 - Runs after rollup in the worker; no-op at 20 rows or fewer
   (`backend/services/episodic_service.py:26`)
 - Merge: exactly one oldest adjacent pair per call, never touching the
-  newest 3 (`backend/services/episodic_service.py:26`); merged via
-  worker-slot summary at max 128 tokens; a slot is one model holder with one role where only one generation runs at a time, and the worker slot is the transient WorkerEngine slot for background summaries. Aborts on empty output or token
-  growth (`backend/services/episodic_service.py:215`); the new row
+  newest 3; merged via worker-slot summary at max 128 tokens
+  (`backend/services/episodic_service.py:160`). Aborts on
+  empty output or token growth; the new row
   carries min start and max end, copies the oldest parent `created_at`
   so created_at ordering stays chronological, and carries max
   `recall_count` and `last_recalled_at`; create-first then delete parents
@@ -357,3 +355,60 @@ idempotent, returns the added `table.column` list, and never raises.
   plus thresholds consumed by the decider and graph
 - `backend/tests/test_rag_eval.py` and `backend/tests/test_worker.py`:
   retrieval quality and summary engine behavior backing rollup and merge
+
+## 9. Stored vectors, backfill, and worker timeouts
+
+Word overlap is the floor, vectors are the recall. An embedding is a
+list of numbers that captures what a text means, so two texts with
+different words but the same meaning sit close together. Closeness is
+cosine similarity, a score from 0 (unrelated) to 1 (same meaning);
+0.5 is the cutoff below which a candidate is ignored.
+
+Each semantic fact and each episodic summary stores one embedding
+(`semantic_memory.embedding`, `episodic_memory.embedding`, nullable
+text holding JSON numbers). Write-time embedding is best-effort:
+background paths embed one batch with load plus unload around it, the
+foreground remember path loads the small mapped embed model on demand
+and unloads after, and any engine failure stores the row with an empty
+vector so the fact is never lost for its vector.
+
+Recall merges stored vectors with one small live batch for rows that
+lack them: the query is always embedded live, stored vectors skip the
+batch, and only vector-less candidates join it. A row missing its
+vector is never skipped: it joins the live batch when the engine runs,
+and falls back to word overlap when the engine is down. Word-overlap exact
+matches keep their priority slots; cosine at or above 0.5 fills the
+rest within the existing caps (5 semantic, 3 episodic). No embed file
+means words-only end to end.
+
+Backfill heals vector-less rows: after aggregation the rollup worker
+embeds up to 10 missing rows per pass, semantic facts first then
+episodic summaries, and stops at the cap. Old rows converge over
+turns with no user action and nothing on the request path.
+
+Worker timeouts bound every background model call: both the chat and
+worker summarize slots abandon a hung call after `SUMMARY_TIMEOUT_S`
+and fall back (extractive summary, empty fact list), and extraction
+uses its own pool with the same budget. A hung model stalls one job,
+never the queue.
+
+## 10. Known gaps - what memory does not do yet
+
+The machinery above is implemented and suite-green; quality on real
+traffic is unproven and these behaviors are absent by design so far:
+
+- No quality proof: unit tests cover mechanics only. Nothing measures
+  whether memory helps real answers; the model eval file is
+  manual-only.
+- No forgetting path: facts store by chat but never delete by chat.
+  Stale facts linger until overwritten under the same key.
+- No contradiction handling: conflicting facts with different keys
+  coexist. Nothing detects or resolves them.
+- Semantic facts never decay: episodic rows track `recall_count` and
+  get forgotten, but semantic rows have no touch tracking, so old
+  preferences weigh the same as new ones.
+- Write coverage is heuristic: explicit patterns plus one background
+  SLM pass. Quietly mentioned preferences in long messages still slip
+  through.
+- Single flat project summary: one text blob per project, no
+  structure and no per-member attribution.
