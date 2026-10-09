@@ -101,7 +101,14 @@ class EpisodicService:
             return None
         clean = summary.strip()
         end = effective_start + len(head)
-        self.repo.create(conversation_id, clean, effective_start, end)
+        try:
+            from services.semantic_writer import _embed_texts
+
+            vecs = _embed_texts([clean])
+            vec = vecs[0] if vecs else None
+        except Exception:
+            vec = None
+        self.repo.create(conversation_id, clean, effective_start, end, embedding=vec)
         logger.info("episodic rollup stored conv=%s turns=%s", conversation_id, len(head))
         return clean
 
@@ -123,11 +130,11 @@ class EpisodicService:
         query_vector: Optional[List[float]] = None,
         candidate_vectors: Optional[Dict[str, List[float]]] = None,
     ) -> List[str]:
-        """Top summaries by token overlap, vector-only hits filling the rest.
+        """Top summaries by token overlap, stored plus override vectors after.
 
         No vector keeps today's overlap-then-recency order. With a
-        query_vector plus candidate_vectors (row id string to vector over
-        the summary text), cosine rescues paraphrases into slots past the
+        query_vector, cosine over stored row vectors (candidate_vectors
+        entries winning ties) rescues paraphrases into slots past the
         overlap hits, recency breaking ties. Returned overlap hits and
         over-threshold vector hits bump recall_count in one commit.
         """
@@ -144,7 +151,7 @@ class EpisodicService:
                 continue
             overlap = len(toks & memory_tokens(text)) if toks else 0
             scored.append((overlap, -idx, text, row))
-        if not (query_vector and candidate_vectors):
+        if not query_vector:
             scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
             top = scored[: max(0, limit)]
             self._touch_hits([r for ov, _, _, r in top if ov > 0])
@@ -158,7 +165,14 @@ class EpisodicService:
         for overlap, neg, text, row in scored:
             if overlap > 0:
                 continue
-            vec = candidate_vectors.get(str(getattr(row, "id", "")))
+            vec = (candidate_vectors or {}).get(str(getattr(row, "id", "")))
+            if vec is None:
+                try:
+                    from repository.semantic_repository import decode_embedding
+
+                    vec = decode_embedding(getattr(row, "embedding", None))
+                except Exception:
+                    vec = None
             sim = cosine_sim(query_vector, vec) if vec else 0.0
             if sim >= MEMORY_VECTOR_MIN_SCORE:
                 vector_only.append((sim, neg, text, row))

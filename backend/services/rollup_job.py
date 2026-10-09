@@ -76,6 +76,13 @@ class RollupJob:
                 logger.debug("project aggregate done summary=%s", bool(project_summary))
             except Exception as e:
                 logger.debug("project aggregate skipped: %s", e)
+            try:
+                from services.semantic_writer import backfill_missing_vectors
+
+                healed = backfill_missing_vectors(db)
+                logger.debug("vector backfill done healed=%s", healed)
+            except Exception as e:
+                logger.debug("vector backfill skipped: %s", e)
         except Exception as e:
             logger.debug("episodic rollup skipped: %s", e)
         finally:

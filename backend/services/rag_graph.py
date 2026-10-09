@@ -504,17 +504,27 @@ class RagGraph:
                 has = False
             if not has:
                 missing_sem_items.append((key, text))
-        epi_items = []
+        missing_epi_items = []
+        stored_epi_vecs = {}
         for row in epi_rows:
             text = memory_embed_text(getattr(row, "summary", "") or "")
-            if text.strip():
-                epi_items.append((str(getattr(row, "id", "")), text))
+            if not text.strip():
+                continue
+            rid = str(getattr(row, "id", ""))
+            try:
+                stored = decode_embedding(getattr(row, "embedding", None))
+            except Exception:
+                stored = None
+            if stored:
+                stored_epi_vecs[rid] = stored
+            else:
+                missing_epi_items.append((rid, text))
         vecs = None
         try:
             texts = (
                 [query or ""]
                 + [text for _, text in missing_sem_items]
-                + [text for _, text in epi_items]
+                + [text for _, text in missing_epi_items]
             )
             vecs = self.rag.engine.embed(texts)
             if (
@@ -542,10 +552,15 @@ class RagGraph:
             sem_vecs = {
                 key: vec for (key, _), vec in zip(missing_sem_items, vecs[1:])
             }
-            epi_vecs = {
-                key: vec
-                for (key, _), vec in zip(epi_items, vecs[1 + len(missing_sem_items):])
-            }
+            epi_vecs = dict(stored_epi_vecs)
+            epi_vecs.update(
+                {
+                    key: vec
+                    for (key, _), vec in zip(
+                        missing_epi_items, vecs[1 + len(missing_sem_items):]
+                    )
+                }
+            )
             try:
                 rows = SemanticMemoryRepository(db).find_relevant(
                     query,

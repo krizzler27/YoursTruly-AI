@@ -127,6 +127,9 @@ class EpisodicMemoryModel(Base, TimestampMixin):
     summary: Mapped[str] = mapped_column(default="")
     turn_start: Mapped[int] = mapped_column(default=0)
     turn_end: Mapped[int] = mapped_column(default=0)
+    embedding: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
     recall_count: Mapped[int] = mapped_column(default=0)
     last_recalled_at: Mapped[Optional[datetime]] = mapped_column(nullable=True, default=None)
 

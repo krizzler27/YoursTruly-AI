@@ -20,13 +20,17 @@ class EpisodicMemoryRepository(BaseRepository[EpisodicMemoryModel]):
         summary: str,
         turn_start: int,
         turn_end: int,
+        embedding=None,
     ) -> EpisodicMemoryModel:
         """Append one summary covering turns [turn_start, turn_end)."""
+        from repository.semantic_repository import encode_embedding
+
         return super().create(
             conversation_id=conversation_id,
             summary=summary or "",
             turn_start=int(turn_start),
             turn_end=int(turn_end),
+            embedding=encode_embedding(embedding),
         )
 
     def list_by_conversation(

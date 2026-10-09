@@ -101,6 +101,7 @@ class DriftedDb(MigrateCase):
                 "conversations.project_id",
                 "episodic_memory.recall_count",
                 "episodic_memory.last_recalled_at",
+                "episodic_memory.embedding",
             },
         )
         after = _columns(self.eng, "conversations")
@@ -162,7 +163,7 @@ class DriftedDb(MigrateCase):
     def test_second_run_is_noop(self):
         self.make_drifted()
         first = ensure_schema(self.eng)
-        self.assertEqual(len(first), 4)
+        self.assertEqual(len(first), 5)
         second = ensure_schema(self.eng)
         self.assertEqual(second, [])
 

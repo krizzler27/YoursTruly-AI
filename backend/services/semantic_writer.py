@@ -127,10 +127,10 @@ def parse_explicit_fact(text: str) -> Optional[Tuple[str, str]]:
 
 
 def _embed_fact(key: str, value: str) -> Optional[List[float]]:
-    """One write-time vector, None unless the embed engine is resident.
+    """One write-time vector, None on engine failure.
 
-    Never loads weights: the foreground path must not evict the resident
-    chat model, so a cold engine skips and recall embeds live instead.
+    Loads the small mapped embed model on demand like recall does, then
+    unloads to restore the one-resident-model discipline.
     """
     try:
         from repository.semantic_repository import memory_embed_text
@@ -140,9 +140,11 @@ def _embed_fact(key: str, value: str) -> Optional[List[float]]:
         if not clipped.strip():
             return None
         engine = EmbeddingEngine.get_instance("embed")
-        if not engine.is_loaded():
-            return None
-        vecs = engine.embed([clipped])
+        engine.ensure_loaded()
+        try:
+            vecs = engine.embed([clipped])
+        finally:
+            engine.unload()
         if not isinstance(vecs, list) or not vecs:
             return None
         vec = vecs[0]
@@ -154,28 +156,23 @@ def _embed_fact(key: str, value: str) -> Optional[List[float]]:
         return None
 
 
-def _embed_many(pairs: List[Tuple[str, str]]) -> List[Optional[List[float]]]:
-    """Batch write-time vectors for background use, load plus unload around.
-
-    Off the request path one bounded load is safe; unload restores the
-    one-resident-model discipline. All fail-open to None.
-    """
-    if not pairs:
-        return []
+def _embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
+    """Batch vectors with load plus unload around, Nones on failure."""
+    clipped = [t for t in ((s or "").strip() for s in (texts or []))]
+    if not any(clipped):
+        return [None] * len(clipped)
     try:
-        from repository.semantic_repository import memory_embed_text
         from services.llama_engine import EmbeddingEngine
 
-        texts = [memory_embed_text(f"{k or ''}: {v or ''}") for k, v in pairs]
         engine = EmbeddingEngine.get_instance("embed")
         engine.ensure_loaded()
         try:
-            vecs = engine.embed(texts)
+            vecs = engine.embed(clipped)
         finally:
             engine.unload()
     except Exception as e:
         logger.debug("semantic batch embed skipped: %s", e)
-        return [None] * len(pairs)
+        return [None] * len(clipped)
     out: List[Optional[List[float]]] = []
     for vec in vecs or []:
         if isinstance(vec, list) and vec:
@@ -185,9 +182,22 @@ def _embed_many(pairs: List[Tuple[str, str]]) -> List[Optional[List[float]]]:
             except (TypeError, ValueError):
                 pass
         out.append(None)
-    while len(out) < len(pairs):
+    while len(out) < len(clipped):
         out.append(None)
-    return out[: len(pairs)]
+    return out[: len(clipped)]
+
+
+def _embed_many(pairs: List[Tuple[str, str]]) -> List[Optional[List[float]]]:
+    """Batch write-time vectors for background use, load plus unload around.
+
+    Off the request path one bounded load is safe; unload restores the
+    one-resident-model discipline. All fail-open to None.
+    """
+    if not pairs:
+        return []
+    from repository.semantic_repository import memory_embed_text
+
+    return _embed_texts([memory_embed_text(f"{k or ''}: {v or ''}") for k, v in pairs])
 
 
 def remember_explicit(db: Session, query: str) -> Optional[SemanticMemoryModel]:
@@ -305,4 +315,82 @@ def extract_and_store(db: Session, messages, limit: int = EXTRACTION_BATCH_TURNS
         return stored
     except Exception as e:
         logger.debug("extract_and_store skipped: %s", e)
+        return 0
+
+
+BACKFILL_DEFAULT_LIMIT = 10
+
+
+def backfill_missing_vectors(db: Session, limit: int = BACKFILL_DEFAULT_LIMIT) -> int:
+    """Embed vector-less semantic and episodic rows, capped. Returns healed."""
+    try:
+        from db.models import EpisodicMemoryModel, SemanticMemoryModel
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from repository.semantic_repository import memory_embed_text
+
+        remaining = max(0, int(limit))
+        if not remaining:
+            return 0
+        targets = []
+        try:
+            sem_rows = (
+                db.query(SemanticMemoryModel)
+                .filter(SemanticMemoryModel.embedding.is_(None))
+                .order_by(SemanticMemoryModel.updated_at.desc())
+                .limit(remaining)
+                .all()
+            )
+        except Exception as e:
+            logger.debug("backfill semantic list skipped: %s", e)
+            sem_rows = []
+        for row in sem_rows or []:
+            if remaining <= 0:
+                break
+            text = memory_embed_text(f"{getattr(row, 'key', '') or ''}: {getattr(row, 'value', '') or ''}")
+            if text.strip():
+                targets.append((row, text))
+                remaining -= 1
+        try:
+            epi_rows = (
+                db.query(EpisodicMemoryModel)
+                .filter(EpisodicMemoryModel.embedding.is_(None))
+                .order_by(EpisodicMemoryModel.created_at.desc())
+                .limit(max(0, remaining))
+                .all()
+            )
+        except Exception as e:
+            logger.debug("backfill episodic list skipped: %s", e)
+            epi_rows = []
+        for row in epi_rows or []:
+            if remaining <= 0:
+                break
+            text = memory_embed_text(getattr(row, "summary", "") or "")
+            if text.strip():
+                targets.append((row, text))
+                remaining -= 1
+        if not targets:
+            return 0
+        healed = 0
+        for row, vec in zip(
+            [r for r, _ in targets],
+            _embed_texts([t for _, t in targets]),
+        ):
+            if not isinstance(vec, list) or not vec:
+                continue
+            try:
+                from repository.semantic_repository import encode_embedding
+
+                row.embedding = encode_embedding(vec)
+                db.commit()
+                healed += 1
+            except Exception as e:
+                logger.debug("backfill store skipped: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                continue
+        return healed
+    except Exception as e:
+        logger.debug("backfill skipped: %s", e)
         return 0

@@ -131,7 +131,8 @@ class WriteTimeVector(DbCase):
         )
         self.assertEqual([h.key for h in hits], ["preference"])
 
-    def test_foreground_never_loads_cold_engine(self):
+    def test_foreground_loads_cold_engine_on_demand(self):
+        from repository.semantic_repository import decode_embedding
         from services.semantic_writer import remember_explicit
 
         fake = ColdEngine()
@@ -140,8 +141,103 @@ class WriteTimeVector(DbCase):
         ):
             row = remember_explicit(self.db, "I prefer strong coffee")
         self.assertIsNotNone(row)
-        self.assertEqual(fake.calls, [])
-        self.assertIsNone(getattr(row, "embedding", None))
+        self.assertEqual(len(fake.calls), 1)
+        self.assertGreaterEqual(getattr(fake, "unloaded", 0), 1)
+        self.assertIsNotNone(decode_embedding(getattr(row, "embedding", None)))
+
+
+class EpisodicVectors(DbCase):
+    def test_rollup_stores_summary_vector(self):
+        import services.rollup_job as rollup_mod
+        import services.summarize_service as sum_mod
+        from db.models import MessagesModel
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from repository.semantic_repository import decode_embedding
+        from services import semantic_writer
+        from services.chat_services import ChatServices
+
+        cid = ChatServices(self.db).ensure_conversation(None, title="t").id
+        for i in range(10):
+            self.db.add(
+                MessagesModel(
+                    conversation_id=cid,
+                    role="user" if i % 2 == 0 else "assistant",
+                    content="we decided the launch plan last tuesday",
+                )
+            )
+        self.db.commit()
+        idle = MagicMock()
+        idle.is_generating.return_value = False
+        fake = FakeCoffeeEmbed()
+        with (
+            patch.object(rollup_mod, "SessionLocal", lambda: self.db),
+            patch("services.llama_engine.LlamaEngine.get_instance", return_value=idle),
+            patch.object(sum_mod, "summarize_text", return_value="decided launch friday"),
+            patch.object(semantic_writer, "extract_facts_slm", return_value=[]),
+            patch(
+                "services.llama_engine.EmbeddingEngine.get_instance", return_value=fake
+            ),
+        ):
+            rollup_mod.rollup_job.run((str(cid), "test-req"))
+        rows = EpisodicMemoryRepository(self.db).list_by_conversation(cid)
+        self.assertTrue(rows)
+        self.assertIsNotNone(decode_embedding(getattr(rows[0], "embedding", None)))
+
+    def test_recall_uses_stored_vectors_without_batch(self):
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from services.episodic_service import EpisodicService
+
+        cid = self.conv_id()
+        EpisodicMemoryRepository(self.db).create(
+            cid, "we decide the launch plan last tuesday", 0, 4, embedding=[1.0, 0.0]
+        )
+        texts = EpisodicService(self.db).recall(
+            cid, "when is the bursting supernova gala", limit=3,
+            query_vector=[1.0, 0.0],
+        )
+        self.assertEqual(texts, ["we decide the launch plan last tuesday"])
+
+    def test_backfill_heals_vector_less_rows(self):
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from repository.semantic_repository import SemanticMemoryRepository, decode_embedding
+        from services.semantic_writer import backfill_missing_vectors
+
+        SemanticMemoryRepository(self.db).upsert("hobby", "late night coding")
+        cid = self.conv_id()
+        EpisodicMemoryRepository(self.db).create(cid, "decided launch friday", 0, 4)
+        fake = FakeCoffeeEmbed()
+        with patch(
+            "services.llama_engine.EmbeddingEngine.get_instance", return_value=fake
+        ):
+            healed = backfill_missing_vectors(self.db, limit=10)
+        self.assertEqual(healed, 2)
+        self.assertIsNotNone(
+            decode_embedding(SemanticMemoryRepository(self.db).get_by_key("hobby").embedding)
+        )
+        rows = EpisodicMemoryRepository(self.db).list_by_conversation(cid)
+        self.assertIsNotNone(decode_embedding(getattr(rows[0], "embedding", None)))
+
+    def test_backfill_respects_cap(self):
+        from repository.semantic_repository import SemanticMemoryRepository
+        from services.semantic_writer import backfill_missing_vectors
+
+        for i in range(5):
+            SemanticMemoryRepository(self.db).upsert(f"fact {i}", f"value {i}")
+        fake = FakeCoffeeEmbed()
+        with patch(
+            "services.llama_engine.EmbeddingEngine.get_instance", return_value=fake
+        ):
+            healed = backfill_missing_vectors(self.db, limit=2)
+        self.assertEqual(healed, 2)
+
+    def conv_id(self):
+        from db.models import ConversationsModel
+
+        row = ConversationsModel(title="t")
+        self.db.add(row)
+        self.db.commit()
+        self.db.refresh(row)
+        return row.id
 
     def test_remember_fail_open_stores_row_with_empty_vector(self):
         from services.semantic_writer import remember_explicit
