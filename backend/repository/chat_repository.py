@@ -9,7 +9,6 @@ from repository.base_repository import BaseRepository
 logger = get_logger(__name__)
 
 TAG_MAX_LENGTH = 64
-TOPIC_MAX_LENGTH = TAG_MAX_LENGTH
 
 
 def normalize_tag(tag: Optional[str]) -> Optional[str]:
@@ -20,11 +19,6 @@ def normalize_tag(tag: Optional[str]) -> Optional[str]:
     if not clean:
         return None
     return clean[:TAG_MAX_LENGTH]
-
-
-def normalize_topic(topic: Optional[str]) -> Optional[str]:
-    """Deprecated alias for normalize_tag."""
-    return normalize_tag(topic)
 
 
 class ChatRepository(BaseRepository[ConversationsModel]):
@@ -53,12 +47,6 @@ class ChatRepository(BaseRepository[ConversationsModel]):
         self.db.refresh(conv)
         return conv
 
-    def set_topic(
-        self, conversation_id, topic: Optional[str]
-    ) -> Optional[ConversationsModel]:
-        """Deprecated alias for set_tag."""
-        return self.set_tag(conversation_id, topic)
-
     def list_by_tag(
         self, tag: str, limit: int = 10, exclude_id=None
     ) -> List[ConversationsModel]:
@@ -74,12 +62,6 @@ class ChatRepository(BaseRepository[ConversationsModel]):
             .limit(max(1, int(limit)))
             .all()
         )
-
-    def list_by_topic(
-        self, topic: str, limit: int = 10, exclude_id=None
-    ) -> List[ConversationsModel]:
-        """Deprecated alias for list_by_tag."""
-        return self.list_by_tag(topic, limit=limit, exclude_id=exclude_id)
 
     def set_project(
         self, conversation_id, project_id

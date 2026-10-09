@@ -387,7 +387,7 @@ class RewriteGate(unittest.TestCase):
         with patch.object(graph_mod.LayaService, "get_instance", return_value=svc), \
                 patch.object(graph_mod, "_rewrite_via_slm") as rw, \
                 patch.object(RagGraph, "_memory_text", return_value=None), \
-                patch.object(RagGraph, "_topic_sibling_lines", return_value=[]):
+                patch.object(RagGraph, "_tag_sibling_lines", return_value=[]):
             if rewrite_error is not None:
                 rw.side_effect = rewrite_error
             else:

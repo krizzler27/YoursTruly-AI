@@ -889,8 +889,8 @@ class TopicBuffer(DbCase):
 
         return EpisodicMemoryRepository(self.db)
 
-    def tag(self, cid, topic):
-        return self.chat_repo().set_topic(cid, topic)
+    def tag(self, cid, tag):
+        return self.chat_repo().set_tag(cid, tag)
 
     def tgraph(self):
         from services.rag_graph import RagGraph
@@ -908,17 +908,17 @@ class TopicBuffer(DbCase):
         self.tag(c1, "laya")
         self.tag(c2, "laya")
         self.tag(c3, "other")
-        self.assertEqual(repo.get_by_id(c1).topic, "laya")
-        self.assertEqual(repo.get_by_id(c3).topic, "other")
-        got = repo.list_by_topic("laya", limit=10, exclude_id=c1)
+        self.assertEqual(repo.get_by_id(c1).tag, "laya")
+        self.assertEqual(repo.get_by_id(c3).tag, "other")
+        got = repo.list_by_tag("laya", limit=10, exclude_id=c1)
         self.assertEqual([r.id for r in got], [c2])
-        self.assertEqual(repo.list_by_topic("  ", limit=10), [])
-        self.assertEqual(repo.list_by_topic("missing", limit=10), [])
+        self.assertEqual(repo.list_by_tag("  ", limit=10), [])
+        self.assertEqual(repo.list_by_tag("missing", limit=10), [])
         self.tag(c1, None)
-        self.assertIsNone(repo.get_by_id(c1).topic)
+        self.assertIsNone(repo.get_by_id(c1).tag)
         self.tag(c2, "   ")
-        self.assertIsNone(repo.get_by_id(c2).topic)
-        self.assertIsNone(repo.set_topic(uuid.uuid4(), "laya"))
+        self.assertIsNone(repo.get_by_id(c2).tag)
+        self.assertIsNone(repo.set_tag(uuid.uuid4(), "laya"))
 
     @_no_laya
     def test_sibling_lines_appear_with_label(self):
@@ -927,7 +927,7 @@ class TopicBuffer(DbCase):
         self.tag(c2, "laya")
         self.epi_repo().create(c2, "decided the launch date is friday", 0, 4)
         g = self.tgraph()
-        lines = g._topic_sibling_lines(c1)
+        lines = g._tag_sibling_lines(c1)
         self.assertEqual(len(lines), 1)
         self.assertIn("Earlier in project laya:", lines[0])
         self.assertIn("friday", lines[0])
@@ -965,13 +965,13 @@ class TopicBuffer(DbCase):
         self.assertIn("beta", system)  # own last turn survives the squeeze
 
     @_no_laya
-    def test_other_topic_excluded(self):
+    def test_other_tag_excluded(self):
         c1, c2 = self.conv(), self.conv()
         self.tag(c1, "laya")
         self.tag(c2, "other")
         self.epi_repo().create(c2, "unrelated decision about monday", 0, 4)
         g = self.tgraph()
-        self.assertEqual(g._topic_sibling_lines(c1), [])
+        self.assertEqual(g._tag_sibling_lines(c1), [])
         out = g.run("what did we decide?", [], c1)
         self.assertNotIn("Earlier in project", out["messages"][0]["content"])
         self.assertNotIn("monday", out["messages"][0]["content"])
@@ -982,8 +982,8 @@ class TopicBuffer(DbCase):
         self.tag(c2, "laya")
         self.epi_repo().create(c2, "sibling decision about friday", 0, 4)
         g = self.tgraph()
-        self.assertEqual(g._topic_sibling_lines(c1), [])
-        self.assertEqual(g._topic_sibling_lines(None), [])
+        self.assertEqual(g._tag_sibling_lines(c1), [])
+        self.assertEqual(g._tag_sibling_lines(None), [])
         out = g.run("hello there", [], c1)
         self.assertNotIn("Earlier in project", out["messages"][0]["content"])
         rag = g.rag
@@ -999,52 +999,52 @@ class TopicBuffer(DbCase):
             sib = self.conv()
             self.tag(sib, "laya")
             self.epi_repo().create(sib, f"sibling summary number {i}", 0, 4)
-        lines = self.tgraph()._topic_sibling_lines(c1)
+        lines = self.tgraph()._tag_sibling_lines(c1)
         self.assertEqual(len(lines), 3)
         self.assertTrue(all("Earlier in project laya:" in line for line in lines))
 
-    def test_api_patch_topic_round_trip(self):
+    def test_api_patch_tag_round_trip(self):
         from pydantic import ValidationError
 
         from schemas.api_schemas import ConversationResponse, ConversationUpdateRequest
         from services.chat_services import ChatServices
 
-        req = ConversationUpdateRequest.model_validate({"topic": "laya"})
-        self.assertEqual((req.title, req.topic), (None, "laya"))
-        self.assertIn("topic", req.model_fields_set)
-        blank = ConversationUpdateRequest.model_validate({"topic": "   "})
-        self.assertIsNone(blank.topic)
+        req = ConversationUpdateRequest.model_validate({"tag": "laya"})
+        self.assertEqual((req.title, req.tag), (None, "laya"))
+        self.assertIn("tag", req.model_fields_set)
+        blank = ConversationUpdateRequest.model_validate({"tag": "   "})
+        self.assertIsNone(blank.tag)
         untouched = ConversationUpdateRequest.model_validate({"title": "Keep"})
-        self.assertNotIn("topic", untouched.model_fields_set)
+        self.assertNotIn("tag", untouched.model_fields_set)
         with self.assertRaises(ValidationError):
-            ConversationUpdateRequest.model_validate({"topic": "x" * 65})
+            ConversationUpdateRequest.model_validate({"tag": "x" * 65})
 
         svc = ChatServices(self.db)
         conv = svc.ensure_conversation(None, title="Original")
-        self.assertIsNone(conv.topic)
-        svc.set_topic(conv.id, "laya")
-        self.assertEqual(svc.chat_repo.get_by_id(conv.id).topic, "laya")
+        self.assertIsNone(conv.tag)
+        svc.set_tag(conv.id, "laya")
+        self.assertEqual(svc.chat_repo.get_by_id(conv.id).tag, "laya")
         resp = ConversationResponse.model_validate(svc.chat_repo.get_by_id(conv.id))
-        self.assertEqual(resp.topic, "laya")
-        svc.set_topic(conv.id, "")
-        self.assertIsNone(svc.chat_repo.get_by_id(conv.id).topic)
+        self.assertEqual(resp.tag, "laya")
+        svc.set_tag(conv.id, "")
+        self.assertIsNone(svc.chat_repo.get_by_id(conv.id).tag)
 
         from router.chat_api import update_conversation
 
         tagged = update_conversation(
-            conv.id, ConversationUpdateRequest.model_validate({"topic": "laya"}), self.db
+            conv.id, ConversationUpdateRequest.model_validate({"tag": "laya"}), self.db
         )
-        self.assertEqual(tagged.topic, "laya")
-        self.assertEqual(tagged.title, "Original")  # topic-only patch keeps title
+        self.assertEqual(tagged.tag, "laya")
+        self.assertEqual(tagged.title, "Original")  # tag-only patch keeps title
         renamed = update_conversation(
             conv.id, ConversationUpdateRequest.model_validate({"title": "New name"}), self.db
         )
         self.assertEqual(renamed.title, "New name")
-        self.assertEqual(renamed.topic, "laya")  # title-only patch keeps topic
+        self.assertEqual(renamed.tag, "laya")  # title-only patch keeps tag
         cleared = update_conversation(
-            conv.id, ConversationUpdateRequest.model_validate({"topic": None}), self.db
+            conv.id, ConversationUpdateRequest.model_validate({"tag": None}), self.db
         )
-        self.assertIsNone(cleared.topic)
+        self.assertIsNone(cleared.tag)
 
 
 class AppContract(unittest.TestCase):

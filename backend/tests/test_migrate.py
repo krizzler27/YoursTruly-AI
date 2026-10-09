@@ -147,7 +147,6 @@ class DriftedDb(MigrateCase):
             db.commit()
             db.refresh(row)
             self.assertEqual(row.tag, "laya")
-            self.assertEqual(row.topic, "laya")
             epi = EpisodicMemoryModel(
                 conversation_id=row.id, summary="fresh note",
                 turn_start=0, turn_end=8,

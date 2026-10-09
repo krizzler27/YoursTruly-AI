@@ -1,6 +1,6 @@
 # Memory System
 
-This system remembers user facts across chats and older turns within a chat, so answers stay personal without refitting everything into the prompt. RAG means answering from uploaded files by retrieving relevant chunks first, and memory supplies the personal side of the same shared window. Rollup is the background job that summarizes older turns into episodic memory after a turn is saved, and compaction is the merge-and-forget pass that bounds episodic rows after rollup. The sections below cover the budget first, then the three tiers, the split, the lifecycle, and the topic API.
+This system remembers user facts across chats and older turns within a chat, so answers stay personal without refitting everything into the prompt. RAG means answering from uploaded files by retrieving relevant chunks first, and memory supplies the personal side of the same shared window. Rollup is the background job that summarizes older turns into episodic memory after a turn is saved, and compaction is the merge-and-forget pass that bounds episodic rows after rollup. The sections below cover the budget first, then the three tiers, the split, the lifecycle, and the tag plus project API.
 
 Pointers only - detail lives elsewhere:
 
@@ -127,26 +127,31 @@ FROM episodic_memory
 WHERE conversation_id = '<uuid>';
 ```
 
-Working-topic - project key across sibling chats.
-Project keys are explicit, never inferred: a chat joins a project only
-when tagged deliberately, and there is no auto-title or auto-populate
+Manual tag - ad-hoc sharing key across sibling chats.
+Tags are explicit, never inferred: a chat shares only when tagged
+deliberately, and there is no auto-title or auto-populate
 (owner decision - improvised labels fragment and pollute recall).
-Schema: `ConversationsModel.topic`, nullable indexed `String(64)`
-(`backend/db/models.py:20`). Write is PATCH topic; blank or null clears;
-normalized to strip plus 64-char cap (`backend/repository/chat_repository.py:14`,
-`backend/schemas/api_schemas.py:59`). Read is `_topic_sibling_lines`:
-same-topic siblings newest-first (limit 10), latest 1 episodic summary
-each, max 3 labeled lines of form `Earlier in project {topic}: ...`
-(`backend/services/rag_graph.py:572`); untagged chats return no lines.
-Caps: max 3 lines (`backend/services/rag_graph.py:31`), fitted into
+Schema: `ConversationsModel.tag`, nullable indexed `String(64)`.
+Write is PATCH tag; blank or null clears;
+normalized to strip plus 64-char cap. Read is `_tag_sibling_lines`:
+same-tag siblings newest-first (limit 10), latest 1 episodic summary
+each, max 3 labeled lines of form `Earlier in project {tag}: ...`;
+untagged chats return no lines.
+Caps: max 3 lines, fitted into
 history-cap remainder via `_fit_topic`; own history is fitted first so
-own-chat episodic in the memory carve keeps priority
-(`backend/services/rag_graph.py:615`).
+own-chat episodic in the memory carve keeps priority.
 
-Inspect topic tags (columns verified against `backend/db/models.py:20`):
+Projects - durable shared groups with one summary row.
+A project is created in the UI and chats join by link
+(`conversations.project_id`, nullable, opt-in). The background worker
+aggregates member episodic rows into `projects.summary` after rollups.
+Member chats read one labeled line (`Project {name} summary: ...`)
+ahead of sibling lines inside the history remainder only.
+
+Inspect tags:
 
 ```sql
-SELECT id, title, topic
+SELECT id, title, tag
 FROM conversations
 ORDER BY updated_at DESC
 LIMIT 10;
@@ -155,7 +160,7 @@ LIMIT 10;
 ```sql
 SELECT id, title
 FROM conversations
-WHERE topic = 'laya'
+WHERE tag = 'laya'
 ORDER BY updated_at DESC
 LIMIT 10;
 ```
@@ -244,35 +249,32 @@ Compaction merge plus forget rules with protections
   up to the over-cap count (`backend/services/episodic_service.py:284`);
   the just-merged row id is excluded from the same-pass forget
 
-## 5. Topic tagging API (project keys)
+## 5. Tag and project API
 
-Topic values are project keys: short deliberate labels (`laya`, `taxes-2026`) naming the project a chat belongs to. Untagged (NULL)
-chats behave exactly as before the feature existed. Keys are never
-generated from titles or first messages.
+Tags are short deliberate labels (`laya`, `taxes-2026`) for ad-hoc
+sharing across chats. Untagged (NULL) chats behave exactly as before the
+feature existed. Tags are never generated from titles or first messages.
 
-Contract: `ConversationUpdateRequest.topic` max 64 chars, null or blank
-clears (`backend/schemas/api_schemas.py:59`,
-`backend/schemas/api_schemas.py:72`). `ChatServices.set_topic` calls
-`ChatRepository.set_topic` with the same normalize rule
-(`backend/services/chat_services.py:62`,
-`backend/repository/chat_repository.py:38`).
+Contract: `ConversationUpdateRequest.tag` max 64 chars, null or blank
+clears. `ChatServices.set_tag` calls `ChatRepository.set_tag` with the
+same normalize rule.
 
 ```bash
 PATCH /api/conversations/<uuid>
 Content-Type: application/json
 
-{"topic": "laya"}
+{"tag": "laya"}
 ```
 
-- Set: `{"topic": "laya"}` tags the chat; value is stripped and capped
-  at 64 chars (`backend/repository/chat_repository.py:14`)
-- Clear: `{"topic": null}` or `{"topic": "  "}` clears to NULL
-- Title-only PATCH omits `topic`; the handler checks
+- Set: `{"tag": "laya"}` tags the chat; value is stripped and capped
+  at 64 chars
+- Clear: `{"tag": null}` or `{"tag": "  "}` clears to NULL
+- Title-only PATCH omits `tag`; the handler checks
   `model_fields_set` so the tag is left alone
-  (`backend/router/chat_api.py:258`)
-- Sibling read: `list_by_topic(topic, limit=10, exclude_id=...)`
+- Sibling read: `list_by_tag(tag, limit=10, exclude_id=...)`
   newest-first minus the current chat
-  (`backend/repository/chat_repository.py:50`)
+- Link: `{"project_id": "<uuid>"}` joins the chat to a project;
+  `{"project_id": null}` clears the link
 
 Delete cascade (`backend/services/chat_services.py:72`):
 `delete_conversation` removes attached docs plus vectors and chunks, then
@@ -330,13 +332,13 @@ Each failure fails open to a cheaper correct path. Fail-open means falling back 
   recall-touch errors log at debug and keep rows
 - Rollup submit or worker error, unknown conversation: skipped; the next
   turn truncates oldest instead
-- Topic sibling error or untagged chat: empty line list, prompt unchanged
+- Tag sibling error or untagged chat: empty line list, prompt unchanged
 - Migration inspect or column failure: skipped with warning, startup
   continues; fresh `create_all` plus migrate is a no-op
 
 Upgrade note: `Base.metadata.create_all` creates missing tables but never
-alters existing ones, so databases created before a column existed (for
-example `conversations.topic`) failed on upgrade. Lifespan wiring runs
+alters existing ones, so databases created before a column existed
+failed on upgrade. Lifespan wiring runs
 `create_all` first, then `ensure_schema(engine)`. `ensure_schema`
 inspects each mapped table, issues `ALTER TABLE ADD COLUMN` for model
 columns missing on disk, creates the index for indexed columns, is
@@ -346,8 +348,8 @@ idempotent, returns the added `table.column` list, and never raises.
 
 - `backend/tests/test_episodic.py`: rollup trigger and head rules, recall
   ranking and touch counts, merge plus forget protections, rollup queue path
-- `backend/tests/test_rag.py`: budget allocate and fit behavior, topic
-  set and `list_by_topic`, message building with memory and topic blocks,
+- `backend/tests/test_rag.py`: budget allocate and fit behavior, tag
+  set and `list_by_tag`, message building with memory and topic blocks,
   sibling-line caps
 - `backend/tests/test_migrate.py`: missing-column backfill, idempotent
   rerun, fresh-database no-op

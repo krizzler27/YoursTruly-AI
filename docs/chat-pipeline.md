@@ -20,12 +20,12 @@ One `POST /api/chat/stream` runs this order. Refs are the claim.
 6. Graph wiring - `decide` branches to `retrieve` on RAG else `build` - `backend/services/rag_graph.py:252-262`.
 7. Decide node - decider call on query plus last 2 history turns, any exception falls back to DIRECT - `backend/services/rag_graph.py:303-315`. The decider is the component that picks DIRECT or RAG for the turn. Gate policy lives in `docs/laya-integration.md`, not here.
 8. Retrieve node - rewrite runs before any generation acquire, `rag.search` is scoped by conversation, error flips to DIRECT with reason `retrieval error`, zero hits flips to DIRECT with reason `no hits` - `backend/services/rag_graph.py:417-449` and `backend/services/rag_graph.py:347-415`. Retrieval detail lives in `docs/rag.md`.
-9. Build node - memory text plus topic sibling lines feed one builder: RAG-with-hits builds grounded messages, otherwise plain chat - `backend/services/rag_graph.py:615-645` and `backend/services/rag_service.py:244-359`. Budget and memory detail lives in `docs/memory-system.md`.
+9. Build node - memory text plus project and tag sibling lines feed one builder: RAG-with-hits builds grounded messages, otherwise plain chat - `backend/services/rag_graph.py:615-645` and `backend/services/rag_service.py:244-359`. Budget and memory detail lives in `docs/memory-system.md`.
 10. Start generation - `llm.astream_chat` with temperature 0.5 on RAG else 0.6 - `backend/router/chat_api.py:59-64`. Slot behavior lives in `docs/llama-inference-engine.md`.
 11. Gate branch - `should_gate` is true only for RAG-with-hits - `backend/router/chat_api.py:66` and `backend/services/grounding_service.py:38-40`. Grade policy lives in `docs/laya-integration.md`.
 12. Direct path - pull first delta for TTFT, wrap as SSE, persist assistant reply, submit rollup, emit `[DONE]` - `backend/router/chat_api.py:78-141`.
 13. Gated path - `_gated_response` resolves filenames, buffers the draft, grades, streams buffered parts in order on pass or skip and refusal on fail, persists the sent text, submits rollup, emits `[DONE]` - `backend/router/chat_api.py:149-222` and `backend/services/grounding_service.py:143-168`.
-14. CRUD outside turns - create, list, list messages, rename plus topic, delete with cascade - `backend/router/chat_api.py:225-287`. Delete removes docs and episodic rows in code and messages via FK cascade - `backend/services/chat_services.py:72-88` and `backend/db/models.py:41`.
+14. CRUD outside turns - create, list, list messages, rename plus tag, delete with cascade - `backend/router/chat_api.py:225-287`. Delete removes docs and episodic rows in code and messages via FK cascade - `backend/services/chat_services.py:72-88` and `backend/db/models.py:41`.
 15. Schemas - `ChatRequest` is `query` plus optional `model`, `conversation_id`, and `context`; empty query is rejected by validation - `backend/schemas/api_schemas.py:6-17`. Note: the router never reads `request.context`, so it is accepted but has no effect on the turn.
 
 ## 2. SSE contract
@@ -89,17 +89,17 @@ Create a shell before attaching files:
 curl -i http://127.0.0.1:8000/api/conversations -H "Content-Type: application/json" -d "{\"title\": \"debug chat\"}"
 ```
 
-List, read, rename plus topic, delete:
+List, read, rename plus tag, delete:
 
 ```sh
 curl -i http://127.0.0.1:8000/api/conversations
 curl -i http://127.0.0.1:8000/api/conversations/<CONV_ID>/messages
 curl -i -X PATCH http://127.0.0.1:8000/api/conversations/<CONV_ID> -H "Content-Type: application/json" -d "{\"title\": \"refund debug\"}"
-curl -i -X PATCH http://127.0.0.1:8000/api/conversations/<CONV_ID> -H "Content-Type: application/json" -d "{\"topic\": \"refunds\"}"
+curl -i -X PATCH http://127.0.0.1:8000/api/conversations/<CONV_ID> -H "Content-Type: application/json" -d "{\"tag\": \"refunds\"}"
 curl -i -X DELETE http://127.0.0.1:8000/api/conversations/<CONV_ID>
 ```
 
-- Sources: create, list, list messages, patch, delete - `backend/router/chat_api.py:225-287`; title and topic shapes - `backend/schemas/api_schemas.py:59-78`.
+- Sources: create, list, list messages, patch, delete - `backend/router/chat_api.py:225-287`; title and tag shapes - `backend/schemas/api_schemas.py:59-78`.
 - `topic` accepts a short tag, null or blank clears it.
 
 Upload one doc to a conversation, then list docs:

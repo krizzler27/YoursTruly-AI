@@ -225,21 +225,7 @@ class TagRename(DbCase):
         repo.set_tag(c1, None)
         self.assertIsNone(repo.get_by_id(c1).tag)
 
-    def test_topic_aliases_delegate_to_tag(self):
-        from repository.chat_repository import ChatRepository
-
-        repo = ChatRepository(self.db)
-        cid = self.conv()
-        repo.set_topic(cid, "laya")
-        self.assertEqual(repo.get_by_id(cid).tag, "laya")
-        self.assertEqual(repo.get_by_id(cid).topic, "laya")
-        sib = self.conv()
-        repo.set_tag(sib, "laya")
-        self.assertEqual(
-            {r.id for r in repo.list_by_topic("laya")}, {cid, sib}
-        )
-
-    def test_topic_request_field_maps_to_tag(self):
+    def test_tag_request_round_trip(self):
         from router.chat_api import update_conversation
         from schemas.api_schemas import ConversationUpdateRequest
         from services.chat_services import ChatServices
@@ -247,14 +233,10 @@ class TagRename(DbCase):
         svc = ChatServices(self.db)
         conv = svc.ensure_conversation(None, title="Original")
         tagged = update_conversation(
-            conv.id, ConversationUpdateRequest.model_validate({"topic": "laya"}), self.db
+            conv.id, ConversationUpdateRequest.model_validate({"tag": "laya"}), self.db
         )
         self.assertEqual(tagged.tag, "laya")
         self.assertEqual(tagged.title, "Original")
-        renamed = update_conversation(
-            conv.id, ConversationUpdateRequest.model_validate({"tag": "other"}), self.db
-        )
-        self.assertEqual(renamed.tag, "other")
 
     def conv(self):
         row = ConversationsModel(title="t")
@@ -307,51 +289,6 @@ class ProjectLink(DbCase):
         self.db.commit()
         self.db.refresh(row)
         return row.id
-
-
-class TopicRenameMigration(unittest.TestCase):
-    def test_topic_values_survive_rename(self):
-        import tempfile
-        from pathlib import Path as FPath
-
-        from sqlalchemy import create_engine, inspect, text
-
-        from db.migrate import ensure_schema
-
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        eng = create_engine(f"sqlite:///{FPath(tmp.name) / 'old.db'}")
-        self.addCleanup(eng.dispose)
-        cid = "c" * 32
-        with eng.begin() as conn:
-            conn.execute(
-                text(
-                    "CREATE TABLE conversations ("
-                    "id CHAR(32) NOT NULL PRIMARY KEY, "
-                    "title VARCHAR NOT NULL, "
-                    "topic VARCHAR(64), "
-                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, "
-                    "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL)"
-                )
-            )
-            conn.execute(
-                text("INSERT INTO conversations (id, title, topic) VALUES (:id, :t, :topic)"),
-                {"id": cid, "t": "old chat", "topic": "laya"},
-            )
-        ensure_schema(eng)
-        cols = {c["name"] for c in inspect(eng).get_columns("conversations")}
-        self.assertIn("tag", cols)
-        self.assertIn("project_id", cols)
-        self.assertNotIn("topic", cols)
-        with eng.connect() as conn:
-            tag = conn.execute(
-                text("SELECT tag FROM conversations WHERE id = :id"), {"id": cid}
-            ).scalar()
-            linked = conn.execute(
-                text("SELECT project_id FROM conversations WHERE id = :id"), {"id": cid}
-            ).scalar()
-        self.assertEqual(tag, "laya")
-        self.assertIsNone(linked)
 
 
 class ProjectAggregation(DbCase):
@@ -514,15 +451,15 @@ class RecallPriority(DbCase):
         from services.rag_graph import RagGraph
 
         member = self.member_with_project()
-        ChatServices(self.db).set_topic(member, "laya")
+        ChatServices(self.db).set_tag(member, "laya")
         for i in range(5):
             sib = ChatServices(self.db).ensure_conversation(None, title=f"s{i}").id
-            ChatServices(self.db).set_topic(sib, "laya")
+            ChatServices(self.db).set_tag(sib, "laya")
             EpisodicMemoryRepository(self.db).create(sib, f"sibling summary {i}", 0, 4)
         rag = MM()
         rag.db = self.db
         g = RagGraph(db=self.db, rag=rag, decider=MM(), llm=MM())
-        lines = g._project_summary_line(member) + g._topic_sibling_lines(member)
+        lines = g._project_summary_line(member) + g._tag_sibling_lines(member)
         self.assertLessEqual(len(lines), 4)
         self.assertEqual(
             len([ln for ln in lines if ln.startswith("Earlier in project")]), 3

@@ -79,7 +79,7 @@ footer{color:var(--faint);font-size:.75rem;margin-top:22px;line-height:1.7}
 <div class="toolbar">
 <button onclick="toggleTheme()">Toggle light / dark</button>
 <div class="toc">
-<a href="#budget">1 Budget</a><a href="#tiers">2 Tiers</a><a href="#split">3 Split</a><a href="#lifecycle">4 Lifecycle</a><a href="#topic">5 Topics</a><a href="#log">6 Budget log</a><a href="#fail">7 Failures</a>
+<a href="#budget">1 Budget</a><a href="#tiers">2 Tiers</a><a href="#split">3 Split</a><a href="#lifecycle">4 Lifecycle</a><a href="#topic">5 Tags</a><a href="#log">6 Budget log</a><a href="#fail">7 Failures</a>
 </div>
 </div>
 
@@ -99,7 +99,7 @@ footer{color:var(--faint);font-size:.75rem;margin-top:22px;line-height:1.7}
 <rect x="810" y="150" width="140" height="56" rx="10" fill="rgba(52,211,153,.12)" stroke="#34d399" stroke-width="1.5"/><text class="nt" x="880" y="173" text-anchor="middle">Prompt</text><text class="ns" x="880" y="190" text-anchor="middle">plain / grounded</text>
 <rect x="200" y="30" width="140" height="52" rx="10" fill="rgba(167,139,250,.12)" stroke="#a78bfa" stroke-width="1.4"/><text class="nt" x="270" y="51" text-anchor="middle">semantic</text><text class="ns" x="270" y="67" text-anchor="middle">facts · all chats</text>
 <rect x="400" y="30" width="150" height="52" rx="10" fill="rgba(167,139,250,.12)" stroke="#a78bfa" stroke-width="1.4"/><text class="nt" x="475" y="51" text-anchor="middle">episodic</text><text class="ns" x="475" y="67" text-anchor="middle">summaries · this chat</text>
-<rect x="610" y="30" width="140" height="52" rx="10" fill="rgba(167,139,250,.12)" stroke="#a78bfa" stroke-width="1.4"/><text class="nt" x="680" y="51" text-anchor="middle">topic siblings</text><text class="ns" x="680" y="67" text-anchor="middle">max 3 lines</text>
+<rect x="610" y="30" width="140" height="52" rx="10" fill="rgba(167,139,250,.12)" stroke="#a78bfa" stroke-width="1.4"/><text class="nt" x="680" y="51" text-anchor="middle">tag siblings</text><text class="ns" x="680" y="67" text-anchor="middle">max 3 lines</text>
 <rect x="200" y="268" width="140" height="52" rx="10" fill="rgba(251,113,133,.1)" stroke="#fb7185" stroke-width="1.4"/><text class="nt" x="270" y="289" text-anchor="middle">Laya gate</text><text class="ns" x="270" y="305" text-anchor="middle">needs-memory ≥ 0.8</text>
 <rect x="810" y="268" width="140" height="52" rx="10" fill="rgba(251,146,60,.12)" stroke="#fb923c" stroke-width="1.4"/><text class="nt" x="880" y="289" text-anchor="middle">Rollup worker</text><text class="ns" x="880" y="305" text-anchor="middle">FIFO background</text>
 <line class="edge main" x1="140" y1="178" x2="192" y2="178" marker-end="url(#aM)"/><line class="edge main" x1="340" y1="178" x2="392" y2="178" marker-end="url(#aM)"/><line class="edge main" x1="550" y1="178" x2="602" y2="178" marker-end="url(#aM)"/><line class="edge main" x1="750" y1="178" x2="802" y2="178" marker-end="url(#aM)"/>
@@ -146,9 +146,9 @@ footer{color:var(--faint);font-size:.75rem;margin-top:22px;line-height:1.7}
 <div class="tier"><span class="pill">Tier 2 · per-chat</span><h3>Episodic - older turns</h3>
 <ul><li><strong>Write:</strong> append one row covering <code>[start, start+len(head))</code>, start = max stored <code>turn_end</code>.</li><li><strong>Read:</strong> newest-10 pool; overlap first, recency breaks ties, vector-only fills past overlap. Hits bump <code>recall_count</code>.</li><li><strong>Cap:</strong> 20 rows triggers compaction.</li></ul>
 <dl class="kv"><dt>Table</dt><dd><code>episodic_memory(summary, turn_start/end, recall_count)</code></dd><dt>Read</dt><dd><code>recall · limit 3</code></dd></dl></div>
-<div class="tier"><span class="pill">Tier 3 · cross-chat key</span><h3>Working-topic - project key</h3>
-<ul><li><strong>Explicit only.</strong> No inference, no auto-title - improvised labels pollute recall.</li><li><strong>Read:</strong> same-topic siblings newest-first (10), latest summary each, max 3 <code>Earlier in project …</code> lines.</li><li><strong>Priority:</strong> own history fits first; siblings take leftover history room only.</li></ul>
-<dl class="kv"><dt>Column</dt><dd><code>conversations.topic NULL=untagged</code></dd><dt>Write</dt><dd><code>PATCH {topic} · blank clears</code></dd></dl></div>
+<div class="tier"><span class="pill">Tier 3 · cross-chat key</span><h3>Manual tag - ad-hoc sharing</h3>
+<ul><li><strong>Explicit only.</strong> No inference, no auto-title - improvised labels pollute recall.</li><li><strong>Read:</strong> same-tag siblings newest-first (10), latest summary each, max 3 <code>Earlier in project …</code> lines.</li><li><strong>Priority:</strong> own history fits first; siblings take leftover history room only.</li></ul>
+<dl class="kv"><dt>Column</dt><dd><code>conversations.tag NULL=untagged</code></dd><dt>Write</dt><dd><code>PATCH {tag} · blank clears</code></dd></dl></div>
 </div>
 <pre>SELECT key, value FROM semantic_memory WHERE key LIKE '%prefer%';
 
@@ -157,7 +157,7 @@ SELECT turn_start, turn_end, recall_count,
 WHERE conversation_id = '&lt;uuid&gt;' ORDER BY created_at DESC LIMIT 10;
 
 SELECT id, title FROM conversations
-WHERE topic = 'laya' ORDER BY updated_at DESC LIMIT 10;</pre>
+WHERE tag = 'laya' ORDER BY updated_at DESC LIMIT 10;</pre>
 <p class="src">Code: <code>db/models.py:20,82,95</code> · <code>repository/semantic_repository.py:14,54,69</code> · <code>services/episodic_service.py:40,97</code> · <code>services/rag_graph.py:572,615</code></p>
 </div>
 
@@ -207,19 +207,19 @@ WHERE topic = 'laya' ORDER BY updated_at DESC LIMIT 10;</pre>
 <p class="src">Code: <code>services/rollup_job.py:26,38</code> · <code>services/episodic_service.py:26,40,87,160,215,284</code></p>
 </div>
 
-<!-- 5 TOPIC -->
+<!-- 5 TAG -->
 <div class="card" id="topic">
-<h2><span class="num">5</span> Topic tagging - project keys <span class="tag">explicit · never inferred</span></h2>
-<p>A chat joins a project only when <strong>you tag it</strong>. <code>NULL</code> = exactly pre-feature behavior.</p>
+<h2><span class="num">5</span> Tag and project - explicit grouping <span class="tag">explicit · never inferred</span></h2>
+<p>A chat shares or joins a project only when <strong>you tag or link it</strong>. <code>NULL</code> = exactly pre-feature behavior.</p>
 <pre>PATCH /api/conversations/&lt;uuid&gt;
 Content-Type: application/json
 
-{"topic": "laya"}        # set (stripped, capped 64)
-{"topic": null}          # clear   ("  " also clears)</pre>
+{"tag": "laya"}        # set (stripped, capped 64)
+{"tag": null}          # clear   ("  " also clears)</pre>
 <ul>
-<li>Title-only PATCH omits <code>topic</code> - handler checks <code>model_fields_set</code> so the tag is left alone.</li>
+<li>Title-only PATCH omits <code>tag</code> - handler checks <code>model_fields_set</code> so the tag is left alone.</li>
 <li>Delete cascades: docs + vectors + chunks → episodic rows → conversation row (messages follow FK).</li>
-<li>Pending rename <code>topic → project</code>: doc updated, code still <code>topic</code>.</li>
+<li>Projects: create a project, link chats by <code>project_id</code>; the worker keeps one shared summary that member chats read.</li>
 </ul>
 <p class="src">Code: <code>schemas/api_schemas.py:59,72</code> · <code>repository/chat_repository.py:14,38,50</code> · <code>router/chat_api.py:258</code></p>
 </div>
@@ -245,8 +245,8 @@ Content-Type: application/json
 <div class="fitem"><b>Gate / retrieval error</b>DIRECT with plain messages; RAG with zero hits reroutes to DIRECT; Laya/grade/rewrite fall back to SLM path, fused order, advisory grades, original query.</div>
 <div class="fitem"><b>Memory error</b>Overlap-only recall, semantic-only text, or no memory block. A memory-less turn never touches the embed engine; shape mismatch → overlap-only.</div>
 <div class="fitem"><b>Rollup / compact error</b>Busy engine, timeout, empty summary → None. Merge abort keeps both parents. Forget/touch errors log at debug and keep rows.</div>
-<div class="fitem"><b>Topic / migration error</b>Sibling failure → empty lines, prompt unchanged. Schema backfill is idempotent and never raises; fresh DB is a no-op.</div>
-<div class="fitem"><b>Tests</b><code>test_episodic</code>: trigger, ranking, merge/forget · <code>test_rag</code>: budget, topic, message build · <code>test_migrate</code>: backfill · <code>test_laya</code>: gates · <code>test_rag_eval / test_worker</code>: quality + engine</div>
+<div class="fitem"><b>Tag / migration error</b>Sibling failure → empty lines, prompt unchanged. Schema backfill is idempotent and never raises; fresh DB is a no-op.</div>
+<div class="fitem"><b>Tests</b><code>test_episodic</code>: trigger, ranking, merge/forget · <code>test_rag</code>: budget, tag, message build · <code>test_migrate</code>: backfill · <code>test_laya</code>: gates · <code>test_rag_eval / test_worker</code>: quality + engine</div>
 </div>
 </div>
 

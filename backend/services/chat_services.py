@@ -69,12 +69,6 @@ class ChatServices:
         logger.info("Conversation tag set - id=%s tag=%s", conv.id, conv.tag)
         return conv
 
-    def set_topic(
-        self, conversation_id: uuid.UUID, topic: Optional[str]
-    ) -> ConversationsModel:
-        """Deprecated alias for set_tag."""
-        return self.set_tag(conversation_id, topic)
-
     def set_project(
         self, conversation_id: uuid.UUID, project_id: Optional[uuid.UUID]
     ) -> ConversationsModel:

@@ -28,7 +28,6 @@ class ConversationResponse(BaseModel):
     id: uuid.UUID
     title: str
     tag: Optional[str] = None
-    topic: Optional[str] = None
     project_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
@@ -61,7 +60,6 @@ class ConversationCreateRequest(BaseModel):
 class ConversationUpdateRequest(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=250, description="New conversation title")
     tag: Optional[str] = Field(default=None, max_length=64, description="Manual tag, null or blank clears")
-    topic: Optional[str] = Field(default=None, max_length=64, description="Deprecated alias for tag")
     project_id: Optional[uuid.UUID] = Field(default=None, description="Linked project, null clears")
 
     @field_validator("title")
@@ -73,7 +71,7 @@ class ConversationUpdateRequest(BaseModel):
             raise ValueError("Title cannot be empty")
         return v.strip()
 
-    @field_validator("tag", "topic", mode="before")
+    @field_validator("tag", mode="before")
     @classmethod
     def check_tag(cls, v):
         if v is None:

@@ -167,7 +167,7 @@ def _memory_shares(
 
     Epi-only hit fits episodic first up to 70 pct, sem-only hit fits
     semantic first up to 70 pct; both/neither keeps semantic-first on
-    the full cap. M5 topic buffer reuses this for its own carve.
+    the full cap. M5 tag buffer reuses this for its own carve.
     """
     cap = max(0, int(cap))
     dominant = int(cap * MEMORY_DOMINANT_SHARE)
@@ -599,10 +599,10 @@ class RagGraph:
             logger.debug("project summary recall skipped: %s", e)
             return []
 
-    def _topic_sibling_lines(
+    def _tag_sibling_lines(
         self, conversation_id: Optional[uuid.UUID] = None
     ) -> List[str]:
-        """Latest episodic summaries from same-topic sibling chats.
+        """Latest episodic summaries from same-tag sibling chats.
 
         One labeled line per sibling, newest siblings first, capped at
         TOPIC_SIBLING_MAX_LINES total. Untagged chats return no lines so
@@ -616,11 +616,11 @@ class RagGraph:
 
             db = self.rag.db
             current = ChatRepository(db).get_by_id(conversation_id)
-            topic = ((getattr(current, "tag", None) or "").strip()) if current else ""
-            if not topic:
+            tag = ((getattr(current, "tag", None) or "").strip()) if current else ""
+            if not tag:
                 return []
             siblings = ChatRepository(db).list_by_tag(
-                topic, limit=10, exclude_id=conversation_id
+                tag, limit=10, exclude_id=conversation_id
             )
             epi_repo = EpisodicMemoryRepository(db)
             lines: List[str] = []
@@ -636,10 +636,10 @@ class RagGraph:
                     continue
                 summary = (getattr(rows[0], "summary", "") or "").strip()
                 if summary:
-                    lines.append(f"Earlier in project {topic}: {summary}")
+                    lines.append(f"Earlier in project {tag}: {summary}")
             return lines[:TOPIC_SIBLING_MAX_LINES]
         except Exception as e:
-            logger.debug("topic sibling recall skipped: %s", e)
+            logger.debug("tag sibling recall skipped: %s", e)
             return []
 
     def _build(self, state: RagState) -> Dict[str, List[Dict[str, str]]]:
@@ -647,7 +647,7 @@ class RagGraph:
 
         Effective priority order: memory carve (sem/epi split per gate
         evidence in _combine_memory) first, then RAG hits, then history.
-        Sibling topic lines ride inside the history cap only: own history
+        Sibling tag lines ride inside the history cap only: own history
         is fitted first and siblings fill the remainder (see _fit_topic),
         so own-chat episodic in the memory carve always keeps priority.
         Route RAG with hits builds grounded messages, otherwise plain
@@ -662,7 +662,7 @@ class RagGraph:
         memory_text = self._memory_text(query, state.get("conversation_id"))
         topic_lines = self._project_summary_line(
             state.get("conversation_id")
-        ) + (self._topic_sibling_lines(state.get("conversation_id")) or [])
+        ) + (self._tag_sibling_lines(state.get("conversation_id")) or [])
 
         if decision is not None and decision.route == "RAG" and hits:
             messages = self.rag.build_messages(

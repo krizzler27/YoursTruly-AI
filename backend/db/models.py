@@ -34,15 +34,6 @@ class ConversationsModel(Base, TimestampMixin):
         nullable=True, default=None, index=True,
     )
 
-    @property
-    def topic(self) -> Optional[str]:
-        """Deprecated alias for tag, kept for old readers."""
-        return self.tag
-
-    @topic.setter
-    def topic(self, value: Optional[str]) -> None:
-        self.tag = value
-
 
 class ProjectsModel(Base, TimestampMixin):
     """Shared project state - one summary row per project name."""
