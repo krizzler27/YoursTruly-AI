@@ -28,6 +28,8 @@ from services.prompt_manager import PromptManager
 
 logger = get_logger(__name__)
 
+TOPIC_LINES_MAX_LINES = 4
+
 
 def rag_context_tokens(n_ctx: Optional[int] = None) -> int:
     """Retrieved-context budget derived from the chat window, never fixed."""
@@ -45,17 +47,17 @@ def _fit_memory(mem: str, mem_cap: int) -> Tuple[str, int]:
 def _fit_topic(
     topic_lines: Optional[List[str]], remainder_tokens: int
 ) -> Tuple[str, int]:
-    """Fit sibling-project lines into leftover history room.
+    """Fit project plus sibling lines into leftover history room.
 
-    Own history keeps strict priority (fitted first); siblings take only
-    the history_cap remainder. Simple remainder fit, not the dominant
-    split in _memory_shares, because the order is fixed priority rather
-    than evidence-weighted sharing.
+    Own history keeps strict priority (fitted first); project and sibling
+    lines take only the history_cap remainder. Cap is 3 sibling lines plus
+    1 project line; the caller orders project first so remainder cuts drop
+    siblings before the project summary.
     """
     lines = [
         (s or "").strip() for s in topic_lines or []
     ]
-    lines = [s for s in lines if s][:3]
+    lines = [s for s in lines if s][:TOPIC_LINES_MAX_LINES]
     if not lines or remainder_tokens <= 0:
         return ("", 0)
     joined = "\n".join(lines)

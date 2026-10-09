@@ -29,6 +29,7 @@ logger = get_logger(__name__)
 
 MEMORY_DOMINANT_SHARE = 0.7
 TOPIC_SIBLING_MAX_LINES = 3
+PROJECT_SUMMARY_MAX_LINES = 1
 
 # Frozen rewrite-needed template, byte-identical to training rows and to
 # the smoke test in backend/notebooks/laya_dataset/test_finetuned.py.
@@ -569,6 +570,35 @@ class RagGraph:
         )
         return text or None
 
+    def _project_summary_line(
+        self, conversation_id: Optional[uuid.UUID] = None
+    ) -> List[str]:
+        """Project shared summary as one labeled line, [] when unlinked.
+
+        Rides the history remainder with sibling lines, never the memory
+        carve, so own-chat episodic keeps priority. Fail-open to [].
+        """
+        if conversation_id is None:
+            return []
+        try:
+            from repository.chat_repository import ChatRepository
+            from repository.project_repository import ProjectRepository
+
+            db = self.rag.db
+            current = ChatRepository(db).get_by_id(conversation_id)
+            project_id = getattr(current, "project_id", None) if current else None
+            if project_id is None:
+                return []
+            proj = ProjectRepository(db).get_by_id(project_id)
+            summary = ((getattr(proj, "summary", "") or "").strip()) if proj else ""
+            if not summary:
+                return []
+            name = ((getattr(proj, "name", "") or "").strip()) or "project"
+            return [f"Project {name} summary: {summary}"][:PROJECT_SUMMARY_MAX_LINES]
+        except Exception as e:
+            logger.debug("project summary recall skipped: %s", e)
+            return []
+
     def _topic_sibling_lines(
         self, conversation_id: Optional[uuid.UUID] = None
     ) -> List[str]:
@@ -630,7 +660,9 @@ class RagGraph:
         decision = state.get("decision")
         hits = state.get("hits", [])
         memory_text = self._memory_text(query, state.get("conversation_id"))
-        topic_lines = self._topic_sibling_lines(state.get("conversation_id"))
+        topic_lines = self._project_summary_line(
+            state.get("conversation_id")
+        ) + (self._topic_sibling_lines(state.get("conversation_id")) or [])
 
         if decision is not None and decision.route == "RAG" and hits:
             messages = self.rag.build_messages(

@@ -354,5 +354,243 @@ class TopicRenameMigration(unittest.TestCase):
         self.assertIsNone(linked)
 
 
+class ProjectAggregation(DbCase):
+    def seed_messages(self, cid, n=10, text="I enjoy late night coding sessions"):
+        from db.models import MessagesModel
+
+        for i in range(n):
+            self.db.add(
+                MessagesModel(
+                    conversation_id=cid,
+                    role="user" if i % 2 == 0 else "assistant",
+                    content=text,
+                )
+            )
+        self.db.commit()
+
+    def test_rollup_updates_project_summary(self):
+        import services.rollup_job as rollup_mod
+        import services.summarize_service as sum_mod
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from repository.project_repository import ProjectRepository
+        from services import semantic_writer
+        from services.chat_services import ChatServices
+
+        svc = ChatServices(self.db)
+        proj = ProjectRepository(self.db).get_or_create("laya")
+        c1 = svc.ensure_conversation(None, title="one").id
+        c2 = svc.ensure_conversation(None, title="two").id
+        svc.set_project(c1, proj.id)
+        svc.set_project(c2, proj.id)
+        EpisodicMemoryRepository(self.db).create(c1, "decided launch friday", 0, 4)
+        EpisodicMemoryRepository(self.db).create(c2, "picked oat milk", 0, 4)
+        self.seed_messages(c1)
+        idle = MagicMock()
+        idle.is_generating.return_value = False
+        with (
+            patch.object(rollup_mod, "SessionLocal", lambda: self.db),
+            patch("services.llama_engine.LlamaEngine.get_instance", return_value=idle),
+            patch.object(sum_mod, "summarize_text", return_value="rolled"),
+            patch.object(semantic_writer, "extract_facts_slm", return_value=[]),
+        ):
+            rollup_mod.rollup_job.run((str(c1), "test-req"))
+        self.assertEqual(ProjectRepository(self.db).get_by_name("laya").summary, "rolled")
+
+    def test_unlinked_chat_leaves_projects_untouched(self):
+        import services.rollup_job as rollup_mod
+        import services.summarize_service as sum_mod
+        from repository.project_repository import ProjectRepository
+        from services import semantic_writer
+        from services.chat_services import ChatServices
+
+        cid = ChatServices(self.db).ensure_conversation(None, title="solo").id
+        self.seed_messages(cid)
+        idle = MagicMock()
+        idle.is_generating.return_value = False
+        with (
+            patch.object(rollup_mod, "SessionLocal", lambda: self.db),
+            patch("services.llama_engine.LlamaEngine.get_instance", return_value=idle),
+            patch.object(sum_mod, "summarize_text", return_value="rolled"),
+            patch.object(semantic_writer, "extract_facts_slm", return_value=[]),
+        ):
+            rollup_mod.rollup_job.run((str(cid), "test-req"))
+        self.assertEqual(ProjectRepository(self.db).list_all(), [])
+
+    def test_member_chat_reads_project_summary(self):
+        from unittest.mock import MagicMock as MM
+
+        from repository.project_repository import ProjectRepository
+        from schemas.rag_schemas import RouteDecision
+        from services.chat_services import ChatServices
+        from services.rag_graph import RagGraph
+        from services.rag_service import RagService
+
+        proj = ProjectRepository(self.db).get_or_create("laya")
+        ProjectRepository(self.db).update_summary(proj.id, "launch friday")
+        member = ChatServices(self.db).ensure_conversation(None, title="m").id
+        ChatServices(self.db).set_project(member, proj.id)
+        outsider = ChatServices(self.db).ensure_conversation(None, title="o").id
+
+        class _FakeEmbed:
+            def embed(self, texts):
+                return [[0.0, 1.0] for _ in texts]
+
+            def unload(self):
+                pass
+
+        def graph():
+            rag = MM()
+            rag.db = self.db
+            rag.engine = _FakeEmbed()
+            rag.build_messages.side_effect = (
+                lambda q, h, hist, **kw: [
+                    {"role": "u", "content": "\n".join(kw.get("topic_lines") or [])}
+                ]
+            )
+            decider = MM()
+            decider.decide.return_value = RouteDecision(route="DIRECT", reason="t")
+            return RagGraph(db=self.db, rag=rag, decider=decider, llm=MM())
+
+        with patch(
+            "services.decider.LayaService.get_instance",
+            side_effect=RuntimeError("laya down"),
+        ):
+            member_text = graph()._build(
+                {"query": "hi", "history": [], "conversation_id": member}
+            )["messages"][0]["content"]
+            outsider_text = graph()._build(
+                {"query": "hi", "history": [], "conversation_id": outsider}
+            )["messages"][0]["content"]
+        self.assertIn("launch friday", member_text)
+        self.assertNotIn("launch friday", outsider_text)
+
+
+class RecallPriority(DbCase):
+    def member_with_project(self, summary="launch friday"):
+        from repository.project_repository import ProjectRepository
+        from services.chat_services import ChatServices
+
+        proj = ProjectRepository(self.db).get_or_create("laya")
+        ProjectRepository(self.db).update_summary(proj.id, summary)
+        member = ChatServices(self.db).ensure_conversation(None, title="m").id
+        ChatServices(self.db).set_project(member, proj.id)
+        return member
+
+    def test_project_rides_history_remainder_not_memory_carve(self):
+        from unittest.mock import MagicMock as MM
+
+        from schemas.rag_schemas import RouteDecision
+        from services.rag_graph import RagGraph
+
+        member = self.member_with_project()
+
+        class _FakeEmbed:
+            def embed(self, texts):
+                return [[0.0, 1.0] for _ in texts]
+
+            def unload(self):
+                pass
+
+        rag = MM()
+        rag.db = self.db
+        rag.engine = _FakeEmbed()
+        g = RagGraph(db=self.db, rag=rag, decider=MM(), llm=MM())
+        with patch(
+            "services.decider.LayaService.get_instance",
+            side_effect=RuntimeError("laya down"),
+        ):
+            mem_text = g._memory_text("launch", member) or ""
+            lines = g._project_summary_line(member)
+        self.assertNotIn("launch friday", mem_text)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("launch friday", lines[0])
+
+    def test_line_caps_hold(self):
+        from unittest.mock import MagicMock as MM
+
+        from repository.episodic_repository import EpisodicMemoryRepository
+        from schemas.rag_schemas import RouteDecision
+        from services.chat_services import ChatServices
+        from services.rag_graph import RagGraph
+
+        member = self.member_with_project()
+        ChatServices(self.db).set_topic(member, "laya")
+        for i in range(5):
+            sib = ChatServices(self.db).ensure_conversation(None, title=f"s{i}").id
+            ChatServices(self.db).set_topic(sib, "laya")
+            EpisodicMemoryRepository(self.db).create(sib, f"sibling summary {i}", 0, 4)
+        rag = MM()
+        rag.db = self.db
+        g = RagGraph(db=self.db, rag=rag, decider=MM(), llm=MM())
+        lines = g._project_summary_line(member) + g._topic_sibling_lines(member)
+        self.assertLessEqual(len(lines), 4)
+        self.assertEqual(
+            len([ln for ln in lines if ln.startswith("Earlier in project")]), 3
+        )
+        self.assertEqual(len([ln for ln in lines if ln.startswith("Project ")]), 1)
+        self.assertTrue(lines[0].startswith("Project "))
+
+    def test_all_four_lines_survive_with_room(self):
+        from unittest.mock import MagicMock as MM
+
+        from services.rag_service import RagService
+
+        rag = RagService(db=self.db, engine=MM(), lance=MM(), docs=MM())
+        lines = ["Project laya summary: launch friday"] + [
+            f"Earlier in project laya: sibling summary {i}" for i in range(3)
+        ]
+        msgs = rag.build_messages("what did we decide?", None, [], topic_lines=lines)
+        system = msgs[0]["content"]
+        self.assertIn("launch friday", system)
+        for i in range(3):
+            self.assertIn(f"sibling summary {i}", system)
+
+    def test_tight_remainder_keeps_project_over_siblings(self):
+        from services.rag_service import _fit_topic
+
+        lines = ["Project laya summary: launch friday"] + [
+            f"Earlier in project laya: sibling summary {i}" for i in range(3)
+        ]
+        block, _ = _fit_topic(lines, 12)
+        self.assertIn("launch friday", block)
+        self.assertNotIn("sibling summary 2", block)
+
+    def test_own_history_squeezes_project_lines(self):
+        from unittest.mock import MagicMock as MM
+
+        from core.context_budget import allocate as real_allocate
+        from services.rag_service import RagService
+
+        member = self.member_with_project()
+        history = [
+            {"role": "user", "content": "alpha " * 40},
+            {"role": "assistant", "content": "beta " * 40},
+        ]
+        rag = RagService(db=self.db, engine=MM(), lance=MM(), docs=MM())
+        full = rag.build_messages(
+            "what did we decide?",
+            None,
+            history,
+            topic_lines=["Project laya summary: launch friday"],
+        )
+        self.assertIn("launch friday", full[0]["content"])
+
+        def tiny_allocate(*a, **k):
+            budget = real_allocate(*a, **k)
+            budget["history_cap"] = 4
+            return budget
+
+        with patch("services.rag_service.allocate", side_effect=tiny_allocate):
+            starved = rag.build_messages(
+                "what did we decide?",
+                None,
+                history,
+                topic_lines=["Project laya summary: launch friday"],
+            )
+        system = starved[0]["content"]
+        self.assertNotIn("launch friday", system)
+        self.assertIn("beta", system)
+
+
 if __name__ == "__main__":
     unittest.main()
