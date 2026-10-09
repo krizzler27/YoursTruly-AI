@@ -16,7 +16,11 @@ from config import config
 from core.context_budget import count_tokens, top_k_for_ctx
 from core.logging import get_logger
 from services.decider import Decider, memory_evidence
-from repository.semantic_repository import SemanticMemoryRepository, memory_embed_text
+from repository.semantic_repository import (
+    SemanticMemoryRepository,
+    decode_embedding,
+    memory_embed_text,
+)
 from services.laya_service import LayaService
 from services.llama_engine import EmbeddingEngine, LlamaEngine, WorkerEngine
 from services.llm_service import LLMService
@@ -455,8 +459,8 @@ class RagGraph:
         """Semantic facts plus episodic summaries in one block, None when none.
 
         Cheap overlap pools first; the embed engine stays untouched on a
-        memory-less turn. Otherwise one batched embed (query plus capped
-        candidates) feeds vector-blended recall; any embed failure falls
+        memory-less turn. Stored semantic vectors need only a query embed,
+        missing candidates join one small batch; any embed failure falls
         back to overlap-only.
         """
         from services.episodic_service import EpisodicService
@@ -488,12 +492,18 @@ class RagGraph:
         evidence = memory_evidence(query, memories=sem_overlap, epi_rows=epi_rows)
         if not evidence.needs_memory and not epi_rows and not sem_rows:
             return None  # memory-less turn, engine untouched
-        sem_items = []
+        missing_sem_items = []
         for row in sem_rows:
             key = getattr(row, "key", "") or ""
             text = memory_embed_text(f"{key}: {getattr(row, 'value', '') or ''}")
-            if text.strip():
-                sem_items.append((key, text))
+            if not text.strip():
+                continue
+            try:
+                has = bool(decode_embedding(getattr(row, "embedding", None)))
+            except Exception:
+                has = False
+            if not has:
+                missing_sem_items.append((key, text))
         epi_items = []
         for row in epi_rows:
             text = memory_embed_text(getattr(row, "summary", "") or "")
@@ -503,7 +513,7 @@ class RagGraph:
         try:
             texts = (
                 [query or ""]
-                + [text for _, text in sem_items]
+                + [text for _, text in missing_sem_items]
                 + [text for _, text in epi_items]
             )
             vecs = self.rag.engine.embed(texts)
@@ -530,11 +540,11 @@ class RagGraph:
         else:
             query_vector = vecs[0]
             sem_vecs = {
-                key: vec for (key, _), vec in zip(sem_items, vecs[1:])
+                key: vec for (key, _), vec in zip(missing_sem_items, vecs[1:])
             }
             epi_vecs = {
                 key: vec
-                for (key, _), vec in zip(epi_items, vecs[1 + len(sem_items):])
+                for (key, _), vec in zip(epi_items, vecs[1 + len(missing_sem_items):])
             }
             try:
                 rows = SemanticMemoryRepository(db).find_relevant(

@@ -1,5 +1,5 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-from sqlalchemy import String, func, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import String, Text, func, ForeignKey, Index, UniqueConstraint
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -107,6 +107,9 @@ class SemanticMemoryModel(Base, TimestampMixin):
     )
     key: Mapped[str] = mapped_column(index=True, unique=True)
     value: Mapped[str] = mapped_column(default="")
+    embedding: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
 
 
 class EpisodicMemoryModel(Base, TimestampMixin):

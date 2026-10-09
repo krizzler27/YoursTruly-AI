@@ -1,16 +1,22 @@
-"""Explicit-remember write path - hardcoded patterns, no model use."""
+"""Explicit-remember fast path plus background semantic extraction."""
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from config import config
 from core.logging import get_logger
 from db.models import SemanticMemoryModel
 from repository.semantic_repository import SemanticMemoryRepository
 from schemas.rag_schemas import SemanticFactList
 
 logger = get_logger(__name__)
+
+# Shared pool so a hung worker SLM cannot stall the serial background
+# queue; mirrors summarize_service worker discipline with the same budget.
+_EXTRACT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="extract-worker")
 
 _VALUE_MAX_CHARS = 500
 _KEY_MAX_CHARS = 128
@@ -120,6 +126,70 @@ def parse_explicit_fact(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _embed_fact(key: str, value: str) -> Optional[List[float]]:
+    """One write-time vector, None unless the embed engine is resident.
+
+    Never loads weights: the foreground path must not evict the resident
+    chat model, so a cold engine skips and recall embeds live instead.
+    """
+    try:
+        from repository.semantic_repository import memory_embed_text
+        from services.llama_engine import EmbeddingEngine
+
+        clipped = memory_embed_text(f"{key or ''}: {value or ''}")
+        if not clipped.strip():
+            return None
+        engine = EmbeddingEngine.get_instance("embed")
+        if not engine.is_loaded():
+            return None
+        vecs = engine.embed([clipped])
+        if not isinstance(vecs, list) or not vecs:
+            return None
+        vec = vecs[0]
+        if not isinstance(vec, list) or not vec:
+            return None
+        return [float(x) for x in vec]
+    except Exception as e:
+        logger.debug("semantic embed skipped: %s", e)
+        return None
+
+
+def _embed_many(pairs: List[Tuple[str, str]]) -> List[Optional[List[float]]]:
+    """Batch write-time vectors for background use, load plus unload around.
+
+    Off the request path one bounded load is safe; unload restores the
+    one-resident-model discipline. All fail-open to None.
+    """
+    if not pairs:
+        return []
+    try:
+        from repository.semantic_repository import memory_embed_text
+        from services.llama_engine import EmbeddingEngine
+
+        texts = [memory_embed_text(f"{k or ''}: {v or ''}") for k, v in pairs]
+        engine = EmbeddingEngine.get_instance("embed")
+        engine.ensure_loaded()
+        try:
+            vecs = engine.embed(texts)
+        finally:
+            engine.unload()
+    except Exception as e:
+        logger.debug("semantic batch embed skipped: %s", e)
+        return [None] * len(pairs)
+    out: List[Optional[List[float]]] = []
+    for vec in vecs or []:
+        if isinstance(vec, list) and vec:
+            try:
+                out.append([float(x) for x in vec])
+                continue
+            except (TypeError, ValueError):
+                pass
+        out.append(None)
+    while len(out) < len(pairs):
+        out.append(None)
+    return out[: len(pairs)]
+
+
 def remember_explicit(db: Session, query: str) -> Optional[SemanticMemoryModel]:
     """Store one explicit fact, None when absent or on error."""
     try:
@@ -127,7 +197,8 @@ def remember_explicit(db: Session, query: str) -> Optional[SemanticMemoryModel]:
         if parsed is None:
             return None
         key, value = parsed
-        return SemanticMemoryRepository(db).upsert(key, value)
+        vec = _embed_fact(key, value)
+        return SemanticMemoryRepository(db).upsert(key, value, embedding=vec)
     except Exception as e:
         logger.debug("explicit remember skipped: %s", e)
         return None
@@ -137,14 +208,33 @@ EXTRACTION_MAX_TOKENS = 256
 EXTRACTION_BATCH_TURNS = 10
 
 
-def extract_facts_slm(lines: List[str]) -> List[Tuple[str, str]]:
+def _run_extract(prompt_text: str):
+    """One SLM pass on the worker slot; load on demand, unload after."""
+    from services.llama_engine import WorkerEngine
+    from services.llm_service import LLMService
+
+    engine = WorkerEngine.get_instance("worker")
+    engine.ensure_loaded()
+    try:
+        svc = LLMService(engine=engine)
+        return svc.invoke(
+            [{"role": "user", "content": prompt_text}],
+            max_tokens=EXTRACTION_MAX_TOKENS,
+            temperature=0.2,
+            structured_output=SemanticFactList,
+        )
+    finally:
+        engine.unload()
+
+
+def extract_facts_slm(
+    lines: List[str], timeout: Optional[float] = None
+) -> List[Tuple[str, str]]:
     """Extract (key, value) facts via worker-slot SLM, [] on any failure."""
     batch = [ln.strip() for ln in (lines or []) if (ln or "").strip()]
     if not batch:
         return []
     try:
-        from services.llama_engine import WorkerEngine
-        from services.llm_service import LLMService
         from services.prompt_manager import PromptManager
 
         prompt_text = PromptManager.render(
@@ -154,19 +244,14 @@ def extract_facts_slm(lines: List[str]) -> List[Tuple[str, str]]:
     except Exception as e:
         logger.warning("extract_skipped_prompt err=%s", e)
         return []
+    budget_s = timeout if timeout is not None else config.SUMMARY_TIMEOUT_S
+    future = _EXTRACT_POOL.submit(_run_extract, prompt_text)
     try:
-        engine = WorkerEngine.get_instance("worker")
-        engine.ensure_loaded()
-        try:
-            svc = LLMService(engine=engine)
-            result = svc.invoke(
-                [{"role": "user", "content": prompt_text}],
-                max_tokens=EXTRACTION_MAX_TOKENS,
-                temperature=0.2,
-                structured_output=SemanticFactList,
-            )
-        finally:
-            engine.unload()
+        result = future.result(timeout=budget_s)
+    except TimeoutError:
+        logger.warning("extract_timeout budget_s=%s", budget_s)
+        future.add_done_callback(lambda _f: _f.exception())
+        return []
     except RuntimeError as e:
         if "Busy" in str(e):
             logger.warning("extract_skipped_busy err=%s", e)
@@ -201,13 +286,18 @@ def extract_and_store(db: Session, messages, limit: int = EXTRACTION_BATCH_TURNS
         ]
         if not batch:
             return 0
-        stored = 0
+        pairs = []
         for key, value in extract_facts_slm(batch):
             clean_key, clean_value = _clean_key(key), _clean_value(value)
             if not clean_key or not clean_value:
                 continue
+            pairs.append((clean_key, clean_value))
+        stored = 0
+        for (clean_key, clean_value), vec in zip(pairs, _embed_many(pairs)):
             try:
-                SemanticMemoryRepository(db).upsert(clean_key, clean_value)
+                SemanticMemoryRepository(db).upsert(
+                    clean_key, clean_value, embedding=vec
+                )
                 stored += 1
             except Exception as e:
                 logger.debug("extract store skipped: %s", e)
