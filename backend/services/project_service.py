@@ -19,7 +19,9 @@ AGGREGATE_MAX_TOKENS = 128
 AGGREGATE_MAX_CHARS = 4000
 
 
-def aggregate_project(db: Session, conversation_id: uuid.UUID) -> Optional[str]:
+def aggregate_project(
+    db: Session, conversation_id: uuid.UUID, timeout: Optional[float] = None
+) -> Optional[str]:
     """Refresh one project summary from member episodic rows, None when skipped."""
     try:
         conv = ChatRepository(db).get_by_id(conversation_id)
@@ -51,7 +53,10 @@ def aggregate_project(db: Session, conversation_id: uuid.UUID) -> Optional[str]:
         if not combined:
             return None
         summary = summarize_mod.summarize_text(
-            combined, max_tokens=AGGREGATE_MAX_TOKENS, role="worker"
+            combined,
+            max_tokens=AGGREGATE_MAX_TOKENS,
+            role="worker",
+            timeout=timeout,
         )
         if not (summary or "").strip():
             return None

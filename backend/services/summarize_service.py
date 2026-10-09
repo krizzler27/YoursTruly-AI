@@ -5,11 +5,9 @@ generation, never nested inside acquire. It takes its own short acquire
 (chat path) or owns the worker slot outright (worker path), so calling it
 while holding the chat acquire would deadlock on the single streamline.
 
-Blocking semantics: the worker slot is a plain blocking call - the
-background caller (rollup/ingest workers) already owns that slot, so no
-timeout is enforced there. The foreground chat slot busy-check-skips while
-generating and enforces timeout through one shared pool; every failure
-falls back to the extractive first-lines summary.
+Blocking semantics: both slots enforce a bounded budget through a shared
+pool so one hung SLM call cannot stall the serial background queue; every
+failure falls back to the extractive first-lines summary.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -26,10 +24,12 @@ logger = get_logger(__name__)
 CHARS_PER_TOKEN = 4
 DEFAULT_SUMMARY_ROLE = "chat"
 
-# One shared pool for the foreground chat slot only: timeout enforcement
-# without building a throwaway executor per call. Worker-slot calls never
-# touch this pool; they block on their own owned slot.
+# One shared pool per slot for timeout enforcement without building a
+# throwaway executor per call. Worker calls run here too so a hung SLM
+# cannot stall the serial background queue; the pooled thread still
+# unloads when the hung call finally returns, keeping the slot usable.
 _CHAT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="summary-chat")
+_WORKER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="summary-worker")
 
 
 def is_degenerate(text: str) -> bool:
@@ -136,17 +136,15 @@ def summarize_text(
 ) -> str:
     """SLM summary with extractive fallback; never raises on model failure.
 
-    Picks the engine by role (default SUMMARY_MODEL_ROLE). The worker slot
-    is fully blocking: the background caller owns it, so the call runs
-    inline with no timeout enforced. The chat slot is foreground-only: it
-    skips while the engine is generating (summary_skipped_busy) and enforces
-    timeout through the shared pool, logging summary_timeout on expiry.
-    Blank input returns "" and any failure returns the first-lines fallback.
-    Degenerate SLM output (repetition loop) logs summary_degenerate_fallback
-    and returns the same extractive fallback as a model failure.
-    Without an explicit role, boxes at or above MIN_WORKER_RAM_GB with
-    a real worker GGUF auto-route to worker so background summaries
-    skip the chat single-flight guard.
+    Picks the engine by role (default SUMMARY_MODEL_ROLE). Both slots
+    enforce a bounded budget through a shared pool: worker abandons a hung
+    SLM after the budget (summary_timeout) and chat skips while generating
+    (summary_skipped_busy) plus the same timeout. Blank input returns ""
+    and any failure returns the first-lines fallback. Degenerate SLM output
+    (repetition loop) logs summary_degenerate_fallback and returns the same
+    extractive fallback as a model failure. Without an explicit role, boxes
+    at or above MIN_WORKER_RAM_GB with a real worker GGUF auto-route to
+    worker so background summaries skip the chat single-flight guard.
     """
     if not (text or "").strip():
         return ""
@@ -155,8 +153,14 @@ def summarize_text(
     fallback_chars = max_tokens * CHARS_PER_TOKEN
 
     if slot == "worker":
+        budget_s = timeout if timeout is not None else config.SUMMARY_TIMEOUT_S
+        future = _WORKER_POOL.submit(_run_worker, head, max_tokens)
         try:
-            out = _run_worker(head, max_tokens)
+            out = future.result(timeout=budget_s)
+        except TimeoutError:
+            logger.warning("summary_timeout slot=%s budget_s=%s", slot, budget_s)
+            future.add_done_callback(lambda _f: _f.exception())
+            return extractive_fallback(head, fallback_chars)
         except RuntimeError as e:
             if "Busy" in str(e):
                 logger.warning("summary_skipped_busy slot=%s err=%s", slot, e)
