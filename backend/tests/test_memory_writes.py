@@ -492,6 +492,23 @@ class RecallPriority(DbCase):
         self.assertIn("launch friday", block)
         self.assertNotIn("sibling summary 2", block)
 
+    def test_budget_log_names_shared_block(self):
+        from unittest.mock import MagicMock as MM
+
+        from services.rag_service import RagService
+
+        rag = RagService(db=self.db, engine=MM(), lance=MM(), docs=MM())
+        with self.assertLogs("services.rag_service", level="INFO") as logs:
+            rag.build_messages(
+                "hi",
+                None,
+                [],
+                topic_lines=["Project laya summary: launch friday"],
+            )
+        line = "\n".join(logs.output)
+        self.assertIn("shared_used=", line)
+        self.assertNotIn("topic_used=", line)
+
     def test_own_history_squeezes_project_lines(self):
         from unittest.mock import MagicMock as MM
 

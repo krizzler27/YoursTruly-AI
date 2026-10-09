@@ -270,24 +270,24 @@ class RagService:
                 history or [], budget["history_cap"]
             )
             mem_block, mem_used = _fit_memory(mem, budget["mem_cap"])
-            topic_block, topic_used = _fit_topic(
+            shared_block, shared_used = _fit_topic(
                 topic_lines, max(0, budget["history_cap"] - hist_used)
             )
             logger.info(
-                "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s topic_used=%s route=%s overflow=%s",
+                "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s shared_used=%s route=%s overflow=%s",
                 budget["total"],
                 budget["usable"],
                 hist_used,
                 0,
                 budget["mem_cap"],
                 mem_used,
-                topic_used,
+                shared_used,
                 "DIRECT",
                 truncated,
             )
             return LLMService.build_chat_messages(
                 fitted_history, clean, memory_text=mem_block or None,
-                topic_text=topic_block or None,
+                topic_text=shared_block or None,
             )
 
         logger.debug("build grounded hits=%s", len(hits))
@@ -300,19 +300,19 @@ class RagService:
             history or [], budget["history_cap"]
         )
         mem_block, mem_used = _fit_memory(mem, budget["mem_cap"])
-        topic_block, topic_used = _fit_topic(
+        shared_block, shared_used = _fit_topic(
             topic_lines, max(0, budget["history_cap"] - hist_used)
         )
         overflow = bool(hits_truncated or hist_truncated)
         logger.info(
-            "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s topic_used=%s route=%s overflow=%s",
+            "budget total=%s usable=%s history=%s rag=%s mem=%s mem_used=%s shared_used=%s route=%s overflow=%s",
             budget["total"],
             budget["usable"],
             hist_used,
             rag_used,
             budget["mem_cap"],
             mem_used,
-            topic_used,
+            shared_used,
             "RAG",
             overflow,
         )
@@ -342,11 +342,11 @@ class RagService:
                 f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')}"
                 for m in fitted_history
             )
-        if topic_block:
+        if shared_block:
             if history_block == "No prior conversation.":
-                history_block = topic_block
+                history_block = shared_block
             else:
-                history_block = f"{history_block}\n{topic_block}"
+                history_block = f"{history_block}\n{shared_block}"
 
         system_content = PromptManager.render(
             "rag_answer.j2",

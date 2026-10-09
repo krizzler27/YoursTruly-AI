@@ -227,12 +227,12 @@ Content-Type: application/json
 <!-- 6 LOG -->
 <div class="card" id="log">
 <h2><span class="num">6</span> Reading the budget log <span class="tag">one line per turn</span></h2>
-<div class="logline">budget total=3840 usable=2978 history=1200 rag=0 mem=300 mem_used=210 topic_used=40 route=DIRECT overflow=False</div>
+<div class="logline">budget total=3840 usable=2978 history=1200 rag=0 mem=300 mem_used=210 shared_used=40 route=DIRECT overflow=False</div>
 <table><tr><th>Field</th><th>Meaning</th><th>Zero means…</th></tr>
 <tr><td><code>total / usable</code></td><td>window − safety; minus answer/system/query</td><td>-</td></tr>
 <tr><td><code>history / rag</code></td><td>fitted tokens actually used</td><td>DIRECT always has <code>rag=0</code></td></tr>
 <tr><td><code>mem / mem_used</code></td><td>carve vs actually used</td><td><code>mem=0</code> → gate said <code>needs_memory=False</code>; check evidence, not the fitter</td></tr>
-<tr><td><code>topic_used</code></td><td>sibling lines in leftover history room</td><td><code>0</code> → own history filled the cap, or siblings have no summaries yet</td></tr>
+<tr><td><code>shared_used</code></td><td>project plus sibling lines in leftover history room</td><td><code>0</code> → own history filled the cap, or siblings have no summaries yet</td></tr>
 <tr><td><code>overflow</code></td><td>oldest turns / lowest-score hits were dropped or cut</td><td><code>False</code> = everything fit</td></tr></table>
 <p class="src">Code: <code>services/rag_service.py:244</code> · <code>core/context_budget.py:108,128</code></p>
 </div>

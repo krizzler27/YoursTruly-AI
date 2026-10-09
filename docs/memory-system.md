@@ -288,7 +288,7 @@ row (messages follow the FK cascade, `backend/db/models.py:20`).
 (`backend/services/rag_service.py:244`):
 
 ```text
-budget total=3840 usable=2978 history=1200 rag=0 mem=300 mem_used=210 topic_used=40 route=DIRECT overflow=False
+budget total=3840 usable=2978 history=1200 rag=0 mem=300 mem_used=210 shared_used=40 route=DIRECT overflow=False
 ```
 
 Field guide - each field maps to code:
@@ -303,7 +303,7 @@ Field guide - each field maps to code:
 - `mem`: `allocate` mem_cap, 0 when `needs_memory` is false
 - `mem_used`: second value from `_fit_memory`
   (`backend/services/rag_service.py:37`)
-- `topic_used`: second value from `_fit_topic`, bounded by
+- `shared_used`: second value from `_fit_topic`, bounded by
   `history_cap - hist_used` (`backend/services/rag_service.py:45`)
 - `route`: `DIRECT` or `RAG` branch taken in `build_messages`
 - `overflow`: `hist_truncated or hits_truncated`; True means oldest
@@ -311,7 +311,7 @@ Field guide - each field maps to code:
 
 If `mem=0` but you expected memory, the gate returned
 `needs_memory=False` - check `memory_evidence` inputs, not the fitter.
-If `topic_used=0` with tagged siblings, own history already filled
+If `shared_used=0` with tagged siblings, own history already filled
 `history_cap`, or siblings have no episodic rows yet.
 
 ## 7. Failure modes
