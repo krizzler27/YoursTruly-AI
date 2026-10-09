@@ -69,6 +69,13 @@ class RollupJob:
                 logger.debug("semantic extract done stored=%s", stored)
             except Exception as e:
                 logger.debug("semantic extract skipped: %s", e)
+            try:
+                from services.project_service import aggregate_project
+
+                project_summary = aggregate_project(db, conv_id)
+                logger.debug("project aggregate done summary=%s", bool(project_summary))
+            except Exception as e:
+                logger.debug("project aggregate skipped: %s", e)
         except Exception as e:
             logger.debug("episodic rollup skipped: %s", e)
         finally:
